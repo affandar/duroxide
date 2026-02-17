@@ -125,6 +125,15 @@ let results = ctx.join(vec![f1, f2, f3]).await;  // Wait for all 3
 
 `join` uses `futures::future::join_all` internally—all futures run concurrently and results are collected in order.
 
+### Session Affinity
+
+Activities scheduled via `ctx.schedule_activity_on_session(name, input, session_id)` are routed
+to the worker process that owns the given session (analogous to network flow affinity).
+Sessions are a pure routing concern — they don't change the execution model. The replay engine
+treats `session_id` as opaque data flowing through `Action` → `Event` → `WorkItem`.
+
+See [Activity Implicit Sessions v2](proposals/activity-implicit-sessions-v2.md) for design details.
+
 ## ReplayEngine Integration
 
 The `ReplayEngine` orchestrates each turn:

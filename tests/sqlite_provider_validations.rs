@@ -12,6 +12,25 @@
 
 #[cfg(feature = "provider-test")]
 mod tests {
+    use duroxide::provider_validations::sessions::{
+        test_abandoned_session_item_ignore_attempt, test_abandoned_session_item_retryable,
+        test_ack_updates_session_last_activity, test_activity_lock_expires_session_lock_valid_same_worker_refetches,
+        test_both_locks_expire_different_worker_claims, test_cleanup_keeps_active_sessions,
+        test_cleanup_keeps_sessions_with_pending_items, test_cleanup_removes_expired_no_items,
+        test_cleanup_then_new_item_recreates_session, test_concurrent_session_claim_only_one_wins,
+        test_different_sessions_different_workers, test_mixed_session_and_non_session_items,
+        test_non_session_items_fetchable_by_any_worker, test_non_session_items_returned_with_session_config,
+        test_none_session_skips_session_items, test_original_worker_reclaims_expired_session,
+        test_renew_session_lock_active, test_renew_session_lock_after_expiry_returns_zero,
+        test_renew_session_lock_no_sessions, test_renew_session_lock_skips_idle,
+        test_renew_work_item_updates_session_last_activity, test_session_affinity_blocks_other_worker,
+        test_session_affinity_same_worker, test_session_claimable_after_lock_expiry,
+        test_session_item_claimable_when_no_session, test_session_items_processed_in_order,
+        test_session_lock_expires_activity_lock_valid_ack_succeeds,
+        test_session_lock_expires_new_owner_gets_redelivery, test_session_lock_expires_same_worker_reacquires,
+        test_session_lock_renewal_extends_past_original_timeout, test_session_takeover_after_lock_expiry,
+        test_shared_worker_id_any_caller_can_fetch_owned_session, test_some_session_returns_all_items,
+    };
     use duroxide::provider_validations::{
         ProviderFactory,
         // Bulk deletion tests
@@ -116,6 +135,7 @@ mod tests {
         test_multi_threaded_no_duplicate_processing,
         test_no_instance_creation_on_enqueue,
         test_null_version_handling,
+        test_orchestration_lock_renewal_after_expiration,
         test_renew_fails_when_entry_deleted,
         test_renew_returns_missing_when_instance_deleted,
         test_renew_returns_running_when_orchestration_active,
@@ -124,6 +144,7 @@ mod tests {
         test_sub_orchestration_instance_creation,
         test_timer_delayed_visibility,
         test_worker_ack_atomicity,
+        test_worker_ack_fails_after_lock_expiry,
         test_worker_delayed_visibility_skips_future_items,
         test_worker_item_immediate_visibility,
         // Worker lock renewal tests
@@ -689,6 +710,17 @@ mod tests {
         test_worker_lock_renewal_after_ack(&SqliteTestFactory).await;
     }
 
+    // Lock expiry boundary tests
+    #[tokio::test]
+    async fn test_sqlite_worker_ack_fails_after_lock_expiry() {
+        test_worker_ack_fails_after_lock_expiry(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_orchestration_lock_renewal_after_expiration() {
+        test_orchestration_lock_renewal_after_expiration(&SqliteTestFactory).await;
+    }
+
     // Prune tests
     #[tokio::test]
     async fn test_sqlite_prune_options_combinations() {
@@ -827,5 +859,182 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_ack_appends_event_to_corrupted_history() {
         test_ack_appends_event_to_corrupted_history(&SharedSqliteTestFactory::new().await).await;
+    }
+
+    // ======================================================================
+    // Session Routing Validations
+    // ======================================================================
+
+    #[tokio::test]
+    async fn test_sqlite_non_session_items_fetchable_by_any_worker() {
+        test_non_session_items_fetchable_by_any_worker(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_item_claimable_when_no_session() {
+        test_session_item_claimable_when_no_session(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_affinity_same_worker() {
+        test_session_affinity_same_worker(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_affinity_blocks_other_worker() {
+        test_session_affinity_blocks_other_worker(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_different_sessions_different_workers() {
+        test_different_sessions_different_workers(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_mixed_session_and_non_session_items() {
+        test_mixed_session_and_non_session_items(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_claimable_after_lock_expiry() {
+        test_session_claimable_after_lock_expiry(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_none_session_skips_session_items() {
+        test_none_session_skips_session_items(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_some_session_returns_all_items() {
+        test_some_session_returns_all_items(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_renew_session_lock_active() {
+        test_renew_session_lock_active(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_renew_session_lock_skips_idle() {
+        test_renew_session_lock_skips_idle(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_renew_session_lock_no_sessions() {
+        test_renew_session_lock_no_sessions(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_cleanup_removes_expired_no_items() {
+        test_cleanup_removes_expired_no_items(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_cleanup_keeps_sessions_with_pending_items() {
+        test_cleanup_keeps_sessions_with_pending_items(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_cleanup_keeps_active_sessions() {
+        test_cleanup_keeps_active_sessions(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_ack_updates_session_last_activity() {
+        test_ack_updates_session_last_activity(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_renew_work_item_updates_session_last_activity() {
+        test_renew_work_item_updates_session_last_activity(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_items_processed_in_order() {
+        test_session_items_processed_in_order(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_non_session_items_returned_with_session_config() {
+        test_non_session_items_returned_with_session_config(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_shared_worker_id_any_caller_can_fetch_owned_session() {
+        test_shared_worker_id_any_caller_can_fetch_owned_session(&SqliteTestFactory).await;
+    }
+
+    // ======================================================================
+    // Session Race Condition Validations
+    // ======================================================================
+
+    #[tokio::test]
+    async fn test_sqlite_concurrent_session_claim_only_one_wins() {
+        test_concurrent_session_claim_only_one_wins(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_takeover_after_lock_expiry() {
+        test_session_takeover_after_lock_expiry(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_cleanup_then_new_item_recreates_session() {
+        test_cleanup_then_new_item_recreates_session(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_abandoned_session_item_retryable() {
+        test_abandoned_session_item_retryable(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_abandoned_session_item_ignore_attempt() {
+        test_abandoned_session_item_ignore_attempt(&SqliteTestFactory).await;
+    }
+
+    // ======================================================================
+    // Session Lock Expiry Boundary Validations
+    // ======================================================================
+
+    #[tokio::test]
+    async fn test_sqlite_renew_session_lock_after_expiry_returns_zero() {
+        test_renew_session_lock_after_expiry_returns_zero(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_original_worker_reclaims_expired_session() {
+        test_original_worker_reclaims_expired_session(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_activity_lock_expires_session_lock_valid_same_worker_refetches() {
+        test_activity_lock_expires_session_lock_valid_same_worker_refetches(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_both_locks_expire_different_worker_claims() {
+        test_both_locks_expire_different_worker_claims(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_lock_expires_activity_lock_valid_ack_succeeds() {
+        test_session_lock_expires_activity_lock_valid_ack_succeeds(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_lock_expires_new_owner_gets_redelivery() {
+        test_session_lock_expires_new_owner_gets_redelivery(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_lock_expires_same_worker_reacquires() {
+        test_session_lock_expires_same_worker_reacquires(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_session_lock_renewal_extends_past_original_timeout() {
+        test_session_lock_renewal_extends_past_original_timeout(&SqliteTestFactory).await;
     }
 }

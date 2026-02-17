@@ -148,13 +148,14 @@ pub async fn worker_attempt_count_starts_at_one(factory: &dyn ProviderFactory) {
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
 
     // Fetch the item
     let (item, token, attempt_count) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -194,13 +195,14 @@ pub async fn worker_attempt_count_increments_on_lock_expiry(factory: &dyn Provid
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
 
     // First fetch with short lock timeout - attempt_count = 1
     let (_item1, _token1, attempt_count1) = provider
-        .fetch_work_item(short_timeout, Duration::ZERO)
+        .fetch_work_item(short_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -211,7 +213,7 @@ pub async fn worker_attempt_count_increments_on_lock_expiry(factory: &dyn Provid
 
     // Second fetch after lock expiry - attempt_count = 2
     let (_item2, token2, attempt_count2) = provider
-        .fetch_work_item(short_timeout, Duration::ZERO)
+        .fetch_work_item(short_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present after lock expiry");
@@ -250,6 +252,7 @@ pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
             id: 1,
             name: "Activity1".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
@@ -261,13 +264,14 @@ pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
             id: 2,
             name: "Activity2".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
 
     // Fetch first item
     let (item1, token1, attempt1) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -275,7 +279,7 @@ pub async fn attempt_count_is_per_message(factory: &dyn ProviderFactory) {
 
     // Fetch second item
     let (item2, token2, attempt2) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -335,13 +339,14 @@ pub async fn abandon_work_item_ignore_attempt_decrements(factory: &dyn ProviderF
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
 
     // First fetch - attempt_count = 1
     let (_item1, token1, attempt1) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -355,7 +360,7 @@ pub async fn abandon_work_item_ignore_attempt_decrements(factory: &dyn ProviderF
 
     // Second fetch - attempt_count = 2
     let (_item2, token2, attempt2) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -369,7 +374,7 @@ pub async fn abandon_work_item_ignore_attempt_decrements(factory: &dyn ProviderF
 
     // Third fetch - attempt_count = 2 (1 stored + 1 from new fetch)
     let (_item3, token3, attempt3) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -486,13 +491,14 @@ pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
 
     // First fetch - attempt_count = 1
     let (_item1, token1, attempt1) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -506,7 +512,7 @@ pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
 
     // Second fetch - attempt_count = 1 (0 + 1)
     let (_item2, token2, attempt2) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -520,7 +526,7 @@ pub async fn ignore_attempt_never_goes_negative(factory: &dyn ProviderFactory) {
 
     // Third fetch - attempt_count = 1 (max(0, 0-1) + 1 = 0 + 1 = 1)
     let (_item3, token3, attempt3) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");

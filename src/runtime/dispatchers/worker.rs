@@ -42,6 +42,75 @@ use super::super::{Runtime, registry};
 // Types
 // ============================================================================
 
+/// Tracks distinct active sessions across all worker slots in a single runtime.
+///
+/// A single `SessionTracker` instance is shared by every `worker_concurrency`
+/// slot spawned from the same `Runtime`. It maps session_id → in-flight
+/// activity count. The number of keys gives the distinct session count,
+/// which is compared against `max_sessions_per_runtime`. When a session's
+/// activity count reaches 0 the entry is removed, freeing a session slot.
+struct SessionTracker {
+    inner: std::sync::Mutex<std::collections::HashMap<String, usize>>,
+}
+
+impl SessionTracker {
+    fn new() -> Self {
+        Self {
+            inner: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Number of distinct sessions currently in flight.
+    fn distinct_count(&self) -> usize {
+        self.inner.lock().expect("SessionTracker lock poisoned").len()
+    }
+
+    /// Increment the in-flight activity count for `session_id`.
+    /// Inserts a new entry if this is the first activity for the session.
+    fn increment(&self, session_id: &str) {
+        let mut map = self.inner.lock().expect("SessionTracker lock poisoned");
+        *map.entry(session_id.to_string()).or_insert(0) += 1;
+    }
+
+    /// Decrement the count for `session_id`, removing the entry when it reaches 0.
+    fn decrement(&self, session_id: &str) {
+        let mut map = self.inner.lock().expect("SessionTracker lock poisoned");
+        if let std::collections::hash_map::Entry::Occupied(mut entry) = map.entry(session_id.to_string()) {
+            let count = entry.get_mut();
+            *count -= 1;
+            if *count == 0 {
+                entry.remove();
+            }
+        }
+    }
+}
+
+/// RAII guard that releases a session slot on drop.
+///
+/// Created via `SessionGuard::new()`. Increments the tracker's count for
+/// the session on creation; decrements (and removes at zero) on drop.
+struct SessionGuard {
+    tracker: Arc<SessionTracker>,
+    session_id: String,
+}
+
+impl SessionGuard {
+    /// Create a guard that increments the tracker for `session_id`.
+    fn new(tracker: &Arc<SessionTracker>, session_id: &str) -> Self {
+        tracker.increment(session_id);
+        Self {
+            tracker: Arc::clone(tracker),
+            session_id: session_id.to_string(),
+        }
+    }
+}
+
+impl Drop for SessionGuard {
+    fn drop(&mut self) {
+        self.tracker.decrement(&self.session_id);
+    }
+}
+
 /// Outcome of activity execution, used for metrics and ack handling.
 #[derive(Debug, Clone, Copy)]
 enum ActivityOutcome {
@@ -76,6 +145,8 @@ struct ActivityWorkContext {
     item_serialized: String,
     /// Worker ID for logging
     worker_id: String,
+    /// Optional session ID for worker affinity routing
+    session_id: Option<String>,
 }
 
 // ============================================================================
@@ -96,12 +167,36 @@ impl Runtime {
 
         tokio::spawn(async move {
             let mut worker_handles = Vec::with_capacity(concurrency);
+            let mut session_owner_ids: Vec<String> = Vec::new();
+
+            // Tracks distinct active sessions across all worker slots in this
+            // runtime. When distinct_count() reaches max_sessions_per_runtime,
+            // ALL slots stop claiming new sessions by switching to non-session mode.
+            let session_tracker = Arc::new(SessionTracker::new());
+
+            // Derive per-slot identities:
+            //   worker_id      – unique per slot, used for logging/tracing
+            //   session_owner  – identity used for session lock claims
+            //
+            // With a stable worker_node_id all slots share the same session
+            // owner so any idle slot can serve any owned session.
+            // Without one, each slot gets an ephemeral identity.
+            let stable_node_id = self.options.worker_node_id.clone();
 
             for worker_idx in 0..concurrency {
                 let rt = Arc::clone(&self);
                 let activities = Arc::clone(&activities);
                 let shutdown = Arc::clone(&shutdown);
-                let worker_id = format!("work-{worker_idx}-{}", rt.runtime_id);
+                let session_tracker_clone = Arc::clone(&session_tracker);
+
+                let suffix = stable_node_id.as_deref().unwrap_or(&self.runtime_id);
+                let worker_id = format!("work-{worker_idx}-{suffix}");
+                let session_owner = stable_node_id.clone().unwrap_or_else(|| worker_id.clone());
+
+                // Collect unique session owner IDs for the session manager
+                if !session_owner_ids.contains(&session_owner) {
+                    session_owner_ids.push(session_owner.clone());
+                }
 
                 let handle = tokio::spawn(async move {
                     let mut consecutive_retryable_errors: u32 = 0;
@@ -114,7 +209,16 @@ impl Runtime {
                         let min_interval = rt.options.dispatcher_min_poll_interval;
                         let start_time = std::time::Instant::now();
 
-                        let work_found = match process_next_work_item(&rt, &activities, &shutdown, &worker_id).await {
+                        let work_found = match process_next_work_item(
+                            &rt,
+                            &activities,
+                            &shutdown,
+                            &worker_id,
+                            &session_owner,
+                            &session_tracker_clone,
+                        )
+                        .await
+                        {
                             Ok(found) => {
                                 consecutive_retryable_errors = 0;
                                 found
@@ -148,6 +252,14 @@ impl Runtime {
                 worker_handles.push(handle);
             }
 
+            // Spawn a single session manager background task for heartbeat + cleanup
+            let session_rt = Arc::clone(&self);
+            let session_shutdown = Arc::clone(&shutdown);
+            let session_handle = tokio::spawn(async move {
+                run_session_manager(session_rt, session_shutdown, session_owner_ids).await;
+            });
+            worker_handles.push(session_handle);
+
             for handle in worker_handles {
                 let _ = handle.await;
             }
@@ -166,10 +278,28 @@ async fn process_next_work_item(
     activities: &Arc<registry::ActivityRegistry>,
     shutdown: &Arc<std::sync::atomic::AtomicBool>,
     worker_id: &str,
+    session_worker_id: &str,
+    session_tracker: &Arc<SessionTracker>,
 ) -> Result<bool, crate::providers::ProviderError> {
+    // Check session capacity: if at limit, only fetch non-session items
+    let at_session_capacity = session_tracker.distinct_count() >= rt.options.max_sessions_per_runtime;
+
+    let session_config = if at_session_capacity {
+        None
+    } else {
+        Some(crate::providers::SessionFetchConfig {
+            owner_id: session_worker_id.to_string(),
+            lock_timeout: rt.options.session_lock_timeout,
+        })
+    };
+
     let (item, token, attempt_count) = match rt
         .history_store
-        .fetch_work_item(rt.options.worker_lock_timeout, rt.options.dispatcher_long_poll_timeout)
+        .fetch_work_item(
+            rt.options.worker_lock_timeout,
+            rt.options.dispatcher_long_poll_timeout,
+            session_config.as_ref(),
+        )
         .await?
     {
         Some(result) => result,
@@ -185,7 +315,36 @@ async fn process_next_work_item(
             id,
             name,
             input,
+            session_id,
         } => {
+            // If this is a session-bound item, acquire a session slot via a guard.
+            // The guard releases the slot on drop (when activity processing completes).
+            // Multiple activities on the same session share one slot.
+            let _session_guard = if let Some(ref sid) = session_id {
+                let guard = SessionGuard::new(session_tracker, sid);
+                // Re-check capacity after acquiring. The pre-fetch check is a hint
+                // to avoid unnecessary fetches, but two workers can race past it.
+                // If we're now over capacity (another worker won the race for a
+                // different session), abandon this item so it retries later.
+                if session_tracker.distinct_count() > rt.options.max_sessions_per_runtime {
+                    drop(guard);
+                    tracing::debug!(
+                        target: "duroxide::runtime",
+                        session_id = %sid,
+                        worker_id = %worker_id,
+                        "Session capacity exceeded after fetch (race), abandoning work item"
+                    );
+                    let _ = rt
+                        .history_store
+                        .abandon_work_item(&token, Some(Duration::from_millis(100)), true)
+                        .await;
+                    return Ok(true);
+                }
+                Some(guard)
+            } else {
+                None
+            };
+
             let ctx = ActivityWorkContext {
                 instance,
                 execution_id,
@@ -196,9 +355,9 @@ async fn process_next_work_item(
                 attempt_count,
                 item_serialized,
                 worker_id: worker_id.to_string(),
+                session_id,
             };
 
-            // Note: We no longer check execution state at fetch time.
             // Cancellation is detected during lock renewal (lock stealing).
             if ctx.attempt_count > rt.options.max_attempts {
                 // Handle poison messages
@@ -357,6 +516,7 @@ async fn build_activity_context(
         ctx.activity_name.clone(),
         ctx.activity_id,
         ctx.worker_id.clone(),
+        ctx.session_id.clone(),
         cancellation_token,
         Arc::clone(&rt.history_store),
     )
@@ -684,4 +844,189 @@ fn spawn_activity_manager(
             "Activity manager stopped"
         );
     })
+}
+
+// ============================================================================
+// Session Manager (Lock Renewal + Cleanup)
+// ============================================================================
+
+/// Background task that periodically:
+/// 1. Renews session locks for all non-idle sessions owned by this runtime's workers
+/// 2. Cleans up orphaned session rows (expired locks, no pending work items)
+async fn run_session_manager(rt: Arc<Runtime>, shutdown: Arc<std::sync::atomic::AtomicBool>, worker_ids: Vec<String>) {
+    let renewal_interval =
+        calculate_renewal_interval(rt.options.session_lock_timeout, rt.options.session_lock_renewal_buffer);
+    let cleanup_interval = rt.options.session_cleanup_interval;
+
+    let mut renewal_ticker = tokio::time::interval(renewal_interval);
+    renewal_ticker.tick().await; // Skip immediate first tick
+
+    let mut cleanup_ticker = tokio::time::interval(cleanup_interval);
+    cleanup_ticker.tick().await; // Skip immediate first tick
+
+    // Short-interval ticker to detect shutdown promptly even when
+    // renewal/cleanup intervals are long (e.g. 5 minutes).
+    let mut shutdown_ticker = tokio::time::interval(Duration::from_secs(5));
+    shutdown_ticker.tick().await;
+
+    // Pre-compute the &str slice for the batched provider call
+    let owner_refs: Vec<&str> = worker_ids.iter().map(|s| s.as_str()).collect();
+
+    tracing::debug!(
+        target: "duroxide::runtime::worker",
+        renewal_interval_secs = %renewal_interval.as_secs(),
+        cleanup_interval_secs = %cleanup_interval.as_secs(),
+        worker_count = %worker_ids.len(),
+        "Session manager started"
+    );
+
+    loop {
+        tokio::select! {
+            _ = renewal_ticker.tick() => {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                // Single batched call for all worker IDs
+                match rt.history_store.renew_session_lock(
+                    &owner_refs,
+                    rt.options.session_lock_timeout,
+                    rt.options.session_idle_timeout,
+                ).await {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::trace!(
+                                target: "duroxide::runtime::worker",
+                                sessions_renewed = %count,
+                                "Session locks renewed"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "duroxide::runtime::worker",
+                            error = %e,
+                            "Session lock renewal failed"
+                        );
+                    }
+                }
+            }
+            _ = cleanup_ticker.tick() => {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+                match rt.history_store.cleanup_orphaned_sessions(
+                    rt.options.session_idle_timeout,
+                ).await {
+                    Ok(count) => {
+                        if count > 0 {
+                            tracing::debug!(
+                                target: "duroxide::runtime::worker",
+                                sessions_cleaned = %count,
+                                "Orphaned sessions cleaned up"
+                            );
+                        }
+                    }
+                    Err(e) => {
+                        tracing::warn!(
+                            target: "duroxide::runtime::worker",
+                            error = %e,
+                            "Session cleanup failed"
+                        );
+                    }
+                }
+            }
+            _ = shutdown_ticker.tick() => {
+                if shutdown.load(Ordering::Relaxed) {
+                    break;
+                }
+            }
+        }
+    }
+
+    tracing::debug!(
+        target: "duroxide::runtime::worker",
+        "Session manager stopped"
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tracker_starts_empty() {
+        let tracker = SessionTracker::new();
+        assert_eq!(tracker.distinct_count(), 0);
+    }
+
+    #[test]
+    fn guard_increments_and_decrements() {
+        let tracker = Arc::new(SessionTracker::new());
+        {
+            let _g = SessionGuard::new(&tracker, "s1");
+            assert_eq!(tracker.distinct_count(), 1);
+        }
+        // Guard dropped — session removed
+        assert_eq!(tracker.distinct_count(), 0);
+    }
+
+    #[test]
+    fn same_session_counts_as_one() {
+        let tracker = Arc::new(SessionTracker::new());
+        let _g1 = SessionGuard::new(&tracker, "s1");
+        let _g2 = SessionGuard::new(&tracker, "s1");
+        // Two activities, but same session → 1 distinct
+        assert_eq!(tracker.distinct_count(), 1);
+    }
+
+    #[test]
+    fn different_sessions_counted_separately() {
+        let tracker = Arc::new(SessionTracker::new());
+        let _g1 = SessionGuard::new(&tracker, "s1");
+        let _g2 = SessionGuard::new(&tracker, "s2");
+        assert_eq!(tracker.distinct_count(), 2);
+    }
+
+    #[test]
+    fn drop_one_of_two_same_session_keeps_session() {
+        let tracker = Arc::new(SessionTracker::new());
+        let _g1 = SessionGuard::new(&tracker, "s1");
+        {
+            let _g2 = SessionGuard::new(&tracker, "s1");
+            assert_eq!(tracker.distinct_count(), 1);
+        }
+        // g2 dropped, but g1 still alive → session still present
+        assert_eq!(tracker.distinct_count(), 1);
+    }
+
+    #[test]
+    fn drop_all_removes_session() {
+        let tracker = Arc::new(SessionTracker::new());
+        {
+            let _g1 = SessionGuard::new(&tracker, "s1");
+            let _g2 = SessionGuard::new(&tracker, "s1");
+            let _g3 = SessionGuard::new(&tracker, "s2");
+            assert_eq!(tracker.distinct_count(), 2);
+        }
+        // All dropped
+        assert_eq!(tracker.distinct_count(), 0);
+    }
+
+    #[test]
+    fn mixed_acquire_release_sequence() {
+        let tracker = Arc::new(SessionTracker::new());
+        let g1 = SessionGuard::new(&tracker, "a");
+        let g2 = SessionGuard::new(&tracker, "b");
+        let g3 = SessionGuard::new(&tracker, "a");
+        assert_eq!(tracker.distinct_count(), 2); // a, b
+
+        drop(g1);
+        assert_eq!(tracker.distinct_count(), 2); // a(1), b(1) — a still has g3
+
+        drop(g3);
+        assert_eq!(tracker.distinct_count(), 1); // b only
+
+        drop(g2);
+        assert_eq!(tracker.distinct_count(), 0);
+    }
 }

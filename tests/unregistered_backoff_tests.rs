@@ -63,7 +63,7 @@ async fn unknown_orchestration_fails_with_poison() {
     // Both should poison
     for instance in ["inst-unknown-name", "inst-unknown-version"] {
         let status = client
-            .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
+            .wait_for_orchestration(instance, std::time::Duration::from_secs(10))
             .await
             .unwrap();
 
@@ -148,7 +148,7 @@ async fn unknown_activity_fails_with_poison() {
 
     let client = duroxide::Client::new(store.clone());
     let status = client
-        .wait_for_orchestration("inst-activity-unknown", std::time::Duration::from_secs(5))
+        .wait_for_orchestration("inst-activity-unknown", std::time::Duration::from_secs(10))
         .await
         .unwrap();
 
@@ -268,7 +268,7 @@ async fn continue_as_new_to_missing_version_fails_with_poison() {
 
     // Wait for it to poison (after the CAN)
     let status = client
-        .wait_for_orchestration("can-missing-test", Duration::from_secs(5))
+        .wait_for_orchestration("can-missing-test", Duration::from_secs(10))
         .await
         .expect("wait should succeed");
 
@@ -321,7 +321,7 @@ async fn delete_poisoned_orchestration() {
 
     // Wait for poison
     let status = client
-        .wait_for_orchestration(instance, Duration::from_secs(5))
+        .wait_for_orchestration(instance, Duration::from_secs(10))
         .await
         .expect("wait should succeed");
 

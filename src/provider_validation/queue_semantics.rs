@@ -18,6 +18,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
                 id: i,
                 name: format!("Activity{i}"),
                 input: format!("input{i}"),
+                session_id: None,
             })
             .await
             .unwrap();
@@ -26,7 +27,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
     // Dequeue all 5 and verify order
     for i in 0..5 {
         let (item, _token, _) = provider
-            .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .unwrap();
@@ -42,7 +43,7 @@ pub async fn test_worker_queue_fifo_ordering<F: ProviderFactory>(factory: &F) {
     // Queue should be empty
     assert!(
         provider
-            .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -64,13 +65,14 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
             id: 1,
             name: "Activity1".to_string(),
             input: "input1".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     // Dequeue (gets item + token)
     let (item, token, _) = provider
-        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -79,7 +81,7 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
     // Attempt second dequeue → should return None
     assert!(
         provider
-            .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -102,7 +104,7 @@ pub async fn test_worker_peek_lock_semantics<F: ProviderFactory>(factory: &F) {
     // Queue should now be empty
     assert!(
         provider
-            .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -159,13 +161,14 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
             id: 1,
             name: "Activity1".to_string(),
             input: "input1".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     // Dequeue and get token
     let (_item, token, _) = provider
-        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -188,7 +191,7 @@ pub async fn test_worker_ack_atomicity<F: ProviderFactory>(factory: &F) {
     // 1. Worker queue is empty
     assert!(
         provider
-            .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -305,13 +308,14 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
             id: 1,
             name: "Activity1".to_string(),
             input: "input1".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     // Dequeue (gets token)
     let (_item, _token, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -322,7 +326,7 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
     // Attempt second dequeue → should return None (locked)
     assert!(
         provider
-            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .fetch_work_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -333,7 +337,7 @@ pub async fn test_lost_lock_token_handling<F: ProviderFactory>(factory: &F) {
 
     // Dequeue again → should succeed → item redelivered
     let (item2, _token2, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -356,12 +360,16 @@ pub async fn test_worker_item_immediate_visibility<F: ProviderFactory>(factory: 
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     // Item should be immediately fetchable (visible_at set to now)
-    let result = provider.fetch_work_item(lock_timeout, Duration::ZERO).await.unwrap();
+    let result = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
+        .await
+        .unwrap();
 
     assert!(
         result.is_some(),
@@ -403,6 +411,7 @@ pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactor
             id: 1,
             name: "Activity1".to_string(),
             input: "first".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
@@ -414,13 +423,14 @@ pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactor
             id: 2,
             name: "Activity2".to_string(),
             input: "second".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     // Fetch first item
     let (item1, token1, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -432,7 +442,7 @@ pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactor
 
     // Fetch again - should get second item (first is delayed even though unlocked)
     let (item2, token2, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -444,7 +454,7 @@ pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactor
     // Trying to fetch again should return None (first is delayed, second is locked)
     assert!(
         provider
-            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .fetch_work_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none(),
@@ -456,7 +466,7 @@ pub async fn test_worker_delayed_visibility_skips_future_items<F: ProviderFactor
 
     // Now first item should be visible again
     let (item3, token3, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

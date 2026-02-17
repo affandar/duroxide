@@ -30,6 +30,9 @@ mod rolling_deployment;
 #[path = "scenarios/version_replay_bug.rs"]
 mod version_replay_bug;
 
+#[path = "scenarios/sessions.rs"]
+mod sessions;
+
 #[cfg(feature = "replay-version-test")]
 #[path = "scenarios/replay_versioning.rs"]
 mod replay_versioning;

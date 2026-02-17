@@ -256,12 +256,13 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     let (_item, token, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -270,7 +271,7 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
     // Verify item is locked (can't fetch again)
     assert!(
         provider
-            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .fetch_work_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -286,7 +287,7 @@ pub async fn test_worker_lock_renewal_success<F: ProviderFactory>(factory: &F) {
     // Item should still be locked
     assert!(
         provider
-            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .fetch_work_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none()
@@ -325,13 +326,14 @@ pub async fn test_worker_lock_renewal_after_expiration<F: ProviderFactory>(facto
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     let short_timeout = Duration::from_secs(1);
     let (_item, token, _) = provider
-        .fetch_work_item(short_timeout, Duration::ZERO)
+        .fetch_work_item(short_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -377,6 +379,7 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
         id: 1,
         name: "TestActivity".to_string(),
         input: "test".to_string(),
+        session_id: None,
     };
 
     // Ack with Running status and enqueue the activity
@@ -411,7 +414,7 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
 
     // 2. Fetch the activity work item
     let (_item, token, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -433,7 +436,10 @@ pub async fn test_worker_lock_renewal_extends_timeout<F: ProviderFactory>(factor
     tokio::time::sleep(post_renewal_wait).await;
 
     // Item should still be locked (we're at 1.0x, renewal extended to 1.6x)
-    let result = provider.fetch_work_item(lock_timeout, Duration::ZERO).await.unwrap();
+    let result = provider
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
+        .await
+        .unwrap();
     assert!(result.is_none(), "Item should still be locked after renewal");
 
     tracing::info!("✓ Test passed: lock timeout extension verified");
@@ -455,13 +461,14 @@ pub async fn test_worker_lock_renewal_after_ack<F: ProviderFactory>(factory: &F)
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     let lock_timeout = factory.lock_timeout();
     let (_item, token, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -503,13 +510,14 @@ pub async fn test_abandon_work_item_releases_lock<F: ProviderFactory>(factory: &
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     // Fetch the work item
     let (item, token, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -518,7 +526,7 @@ pub async fn test_abandon_work_item_releases_lock<F: ProviderFactory>(factory: &
     // Verify lock is held - no items available
     assert!(
         provider
-            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .fetch_work_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none(),
@@ -530,7 +538,7 @@ pub async fn test_abandon_work_item_releases_lock<F: ProviderFactory>(factory: &
 
     // Item should be immediately available again
     let (item2, token2, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -569,13 +577,14 @@ pub async fn test_abandon_work_item_with_delay<F: ProviderFactory>(factory: &F) 
             id: 1,
             name: "TestActivity".to_string(),
             input: "test".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
 
     // Fetch the work item
     let (_item, token, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -587,7 +596,7 @@ pub async fn test_abandon_work_item_with_delay<F: ProviderFactory>(factory: &F) 
     // Item should NOT be immediately available (delayed)
     assert!(
         provider
-            .fetch_work_item(lock_timeout, Duration::ZERO)
+            .fetch_work_item(lock_timeout, Duration::ZERO, None)
             .await
             .unwrap()
             .is_none(),
@@ -599,7 +608,7 @@ pub async fn test_abandon_work_item_with_delay<F: ProviderFactory>(factory: &F) 
 
     // Now item should be available
     let (item2, token2, _) = provider
-        .fetch_work_item(lock_timeout, Duration::ZERO)
+        .fetch_work_item(lock_timeout, Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();
@@ -620,4 +629,88 @@ pub async fn test_abandon_work_item_with_delay<F: ProviderFactory>(factory: &F) 
         .unwrap();
 
     tracing::info!("✓ Test passed: abandon_work_item with delay verified");
+}
+
+/// G2: Worker ack fails after lock expiry
+/// Goal: Verify that ack_work_item fails when the worker lock has expired,
+/// even if no other worker has reclaimed the item.
+/// (Mirrors test_lock_expiration_during_ack which tests the orchestration side.)
+pub async fn test_worker_ack_fails_after_lock_expiry<F: ProviderFactory>(factory: &F) {
+    let provider = factory.create_provider().await;
+
+    provider
+        .enqueue_for_worker(WorkItem::ActivityExecute {
+            instance: "ack-expiry-test".to_string(),
+            execution_id: 1,
+            id: 1,
+            name: "TestActivity".to_string(),
+            input: "test".to_string(),
+            session_id: None,
+        })
+        .await
+        .unwrap();
+
+    let short_timeout = Duration::from_secs(1);
+    let (_item, token, _) = provider
+        .fetch_work_item(short_timeout, Duration::ZERO, None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Wait for lock to expire
+    tokio::time::sleep(short_timeout + Duration::from_millis(200)).await;
+
+    // Ack with the expired token — must fail
+    let result = provider
+        .ack_work_item(
+            &token,
+            Some(WorkItem::ActivityCompleted {
+                instance: "ack-expiry-test".to_string(),
+                execution_id: 1,
+                id: 1,
+                result: "done".to_string(),
+            }),
+        )
+        .await;
+    assert!(result.is_err(), "Ack must fail when worker lock has expired");
+
+    // The item should still be in the queue (not deleted) and refetchable
+    let refetch = provider
+        .fetch_work_item(Duration::from_secs(5), Duration::ZERO, None)
+        .await
+        .unwrap();
+    assert!(
+        refetch.is_some(),
+        "Item should still be refetchable after expired ack was rejected"
+    );
+
+    tracing::info!("✓ Test passed: worker ack after lock expiry correctly rejected");
+}
+
+/// G7: Orchestration lock renewal fails after expiry
+/// Goal: Verify renew_orchestration_item_lock fails when the lock has expired.
+/// (Mirrors test_worker_lock_renewal_after_expiration which tests the worker side.)
+pub async fn test_orchestration_lock_renewal_after_expiration<F: ProviderFactory>(factory: &F) {
+    let provider = factory.create_provider().await;
+    let lock_timeout = provider_lock_timeout(factory);
+
+    // Enqueue and fetch an orchestration item
+    provider
+        .enqueue_for_orchestrator(start_item("orch-renewal-expiry"), None)
+        .await
+        .unwrap();
+    let (_item, token, _) = provider
+        .fetch_orchestration_item(lock_timeout, Duration::ZERO, None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    // Wait for lock to expire
+    tokio::time::sleep(lock_timeout + Duration::from_millis(100)).await;
+
+    // Renewal should fail
+    let result = provider.renew_orchestration_item_lock(&token, lock_timeout).await;
+    assert!(result.is_err(), "Should fail to renew expired orchestration lock");
+
+    tracing::info!("✓ Test passed: orchestration lock renewal after expiry rejected");
 }

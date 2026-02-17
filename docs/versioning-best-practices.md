@@ -342,3 +342,11 @@ appropriate range for your cluster.
 - [Migration Guide](migration-guide.md) - For major version migrations
 - [Continue As New Semantics](continue-as-new.md) - Deep dive into CAN behavior
 - [ORCHESTRATION-GUIDE.md](ORCHESTRATION-GUIDE.md) - Complete orchestration reference
+
+### Rolling Upgrades with Session Activities
+
+Session-bound activities are pinned to the owning worker until the session unpins.
+During rolling upgrades, ensure session activity handlers are registered on all workers
+before orchestrations schedule activities on sessions. If a session activity is not
+registered on the owning worker, it will poison after `max_attempts` backoff cycles
+rather than failing over to an upgraded worker.

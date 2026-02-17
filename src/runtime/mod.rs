@@ -262,6 +262,55 @@ pub struct RuntimeOptions {
     ///
     /// Default: `None` (uses `>=0.0.0, <=CURRENT_BUILD_VERSION`)
     pub supported_replay_versions: Option<crate::providers::SemverRange>,
+
+    /// Lock timeout for session heartbeat lease.
+    /// Controls crash recovery speed — if a worker dies, its sessions become
+    /// claimable after this duration.
+    /// Default: 30 seconds
+    pub session_lock_timeout: Duration,
+
+    /// Buffer time before session lock expiration to trigger renewal.
+    /// Uses the same formula as `worker_lock_renewal_buffer`.
+    /// Default: 5 seconds
+    pub session_lock_renewal_buffer: Duration,
+
+    /// How long a session stays pinned after the last activity is
+    /// fetched, renewed, or completed. The session renewal thread
+    /// stops heartbeating idle sessions, so their locks naturally expire.
+    /// Default: 5 minutes
+    pub session_idle_timeout: Duration,
+
+    /// How often orphaned session rows are swept from the sessions table.
+    /// Runs on the same background thread as session lock renewal.
+    /// Default: 5 minutes
+    pub session_cleanup_interval: Duration,
+
+    /// Maximum number of distinct sessions this runtime will own concurrently,
+    /// spanning **all** `worker_concurrency` slots.
+    ///
+    /// A single `SessionTracker` is shared across every worker slot in this
+    /// runtime. When `distinct_count()` reaches this limit, **all** slots stop
+    /// claiming new sessions (fetch switches to non-session mode) until an
+    /// in-flight session activity completes and frees a session slot.
+    ///
+    /// Session activities and non-session activities share the same
+    /// `worker_concurrency` slots.
+    /// Default: 10
+    pub max_sessions_per_runtime: usize,
+
+    /// Stable worker identity for session ownership.
+    /// If set, used directly as the session `worker_id` for session claims —
+    /// all `worker_concurrency` slots share this single identity, so any idle
+    /// slot can serve any session owned by this runtime (no head-of-line blocking).
+    /// Also allows a restarted worker to reclaim its sessions without waiting
+    /// for lock expiry.
+    /// Example: Kubernetes StatefulSet pod name.
+    /// If `None`, uses ephemeral per-slot identity (`work-{idx}-{runtime_id}`);
+    /// sessions are pinned per-slot and cannot survive restarts.
+    /// Note: Logging/tracing always includes the per-slot `work-{idx}-{node_id}`
+    /// format regardless of this setting.
+    /// Default: None
+    pub worker_node_id: Option<String>,
 }
 
 impl Default for RuntimeOptions {
@@ -280,6 +329,12 @@ impl Default for RuntimeOptions {
             max_attempts: 10,
             activity_cancellation_grace_period: Duration::from_secs(10),
             supported_replay_versions: None,
+            session_lock_timeout: Duration::from_secs(30),
+            session_lock_renewal_buffer: Duration::from_secs(5),
+            session_idle_timeout: Duration::from_secs(300), // 5 minutes
+            session_cleanup_interval: Duration::from_secs(300), // 5 minutes
+            max_sessions_per_runtime: 10,
+            worker_node_id: None,
         }
     }
 }
@@ -785,12 +840,33 @@ impl Runtime {
     }
 
     /// Start a new runtime with custom options.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `session_idle_timeout` is not greater than the worker lock renewal interval
+    /// (`worker_lock_timeout - worker_lock_renewal_buffer`). This prevents sessions from being
+    /// unpinned during long-running activity execution.
     pub async fn start_with_options(
         history_store: Arc<dyn Provider>,
         activity_registry: registry::ActivityRegistry,
         orchestration_registry: OrchestrationRegistry,
         options: RuntimeOptions,
     ) -> Arc<Self> {
+        // Validate session timeout invariant
+        let worker_renewal_interval = options
+            .worker_lock_timeout
+            .checked_sub(options.worker_lock_renewal_buffer)
+            .unwrap_or(Duration::from_secs(1));
+        if options.session_idle_timeout <= worker_renewal_interval {
+            panic!(
+                "session_idle_timeout ({}s) must be greater than worker lock renewal interval ({}s). \
+                 Sessions would unpin during long-running activity execution. \
+                 Increase session_idle_timeout or decrease worker_lock_timeout.",
+                options.session_idle_timeout.as_secs(),
+                worker_renewal_interval.as_secs(),
+            );
+        }
+
         // Inject built-in system activities (new_guid, utc_now_ms)
         let activity_registry = inject_builtin_activities(activity_registry);
 

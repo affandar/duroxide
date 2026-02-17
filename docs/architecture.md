@@ -59,6 +59,7 @@ duroxide/
 ├── Runtime
 │   ├── Orchestration Dispatcher  (processes workflow turns)
 │   ├── Worker Dispatcher         (executes activities)
+│   ├── Session Manager           (heartbeat + cleanup for session affinity)
 │   ├── Replay Engine             (deterministic state recovery)
 │   └── Observability             (tracing, metrics)
 │
@@ -84,6 +85,7 @@ duroxide/
 | Sub-orchestrations | [Sub-orchestrations](sub-orchestrations.md) |
 | Continue-as-new | [ContinueAsNew Semantics](continue-as-new.md) |
 | External events | [External Event Semantics](external-events.md) |
+| Session affinity | [Activity Implicit Sessions v2](proposals/activity-implicit-sessions-v2.md) |
 | Provider implementation | [Provider Implementation Guide](provider-implementation-guide.md) |
 | Observability | [Observability Guide](observability-guide.md) |
 

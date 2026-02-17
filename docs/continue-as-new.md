@@ -52,6 +52,8 @@ The compiler will warn about unreachable code if you forget `return`.
 - Re-create subscriptions and timers in the new execution; carry forward any needed state via the new input.
 - External events sent before the new execution subscribes will be dropped; raise them after the new execution has subscribed.
 - Use deterministic correlation IDs if you coordinate sub-orchestrations across executions.
+- **Sessions survive ContinueAsNew** — the session row persists, and the new execution
+  can schedule activities on the same `session_id`. Activities route to the same worker.
 
 ## Pruning Old Executions
 

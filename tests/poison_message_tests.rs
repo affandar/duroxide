@@ -100,13 +100,14 @@ async fn worker_attempt_count_increments_on_lock_expiry() {
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .expect("enqueue should succeed");
 
     // First fetch - attempt_count should be 1
     let (_item1, _token1, count1) = provider
-        .fetch_work_item(short_timeout, Duration::ZERO)
+        .fetch_work_item(short_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present");
@@ -117,7 +118,7 @@ async fn worker_attempt_count_increments_on_lock_expiry() {
 
     // Second fetch after expiry - attempt_count should be 2
     let (_item2, token2, count2) = provider
-        .fetch_work_item(short_timeout, Duration::ZERO)
+        .fetch_work_item(short_timeout, Duration::ZERO, None)
         .await
         .expect("fetch should succeed")
         .expect("item should be present after lock expiry");

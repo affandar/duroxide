@@ -146,6 +146,7 @@ impl Runtime {
                             scheduling_event_id,
                             name,
                             input,
+                            session_id,
                         } => {
                             let execution_id = self.get_execution_id_for_instance(instance, Some(execution_id)).await;
                             worker_items.push(WorkItem::ActivityExecute {
@@ -154,6 +155,7 @@ impl Runtime {
                                 id: *scheduling_event_id,
                                 name: name.clone(),
                                 input: input.clone(),
+                                session_id: session_id.clone(),
                             });
                         }
                         crate::Action::CreateTimer {

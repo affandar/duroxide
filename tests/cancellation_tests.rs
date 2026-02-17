@@ -9,7 +9,7 @@ use duroxide::EventKind;
 use duroxide::providers::error::ProviderError;
 use duroxide::providers::{
     DispatcherCapabilityFilter, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin,
-    ScheduledActivityIdentifier, WorkItem,
+    ScheduledActivityIdentifier, SessionFetchConfig, WorkItem,
 };
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self};
@@ -2021,8 +2021,9 @@ impl Provider for RecordingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        session: Option<&SessionFetchConfig>,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
-        self.inner.fetch_work_item(lock_timeout, poll_timeout).await
+        self.inner.fetch_work_item(lock_timeout, poll_timeout, session).await
     }
 
     async fn ack_orchestration_item(
@@ -2080,6 +2081,19 @@ impl Provider for RecordingProvider {
         ignore_attempt: bool,
     ) -> Result<(), ProviderError> {
         self.inner.abandon_work_item(token, delay, ignore_attempt).await
+    }
+
+    async fn renew_session_lock(
+        &self,
+        owner_ids: &[&str],
+        extend_for: Duration,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError> {
+        self.inner.renew_session_lock(owner_ids, extend_for, idle_timeout).await
+    }
+
+    async fn cleanup_orphaned_sessions(&self, idle_timeout: Duration) -> Result<usize, ProviderError> {
+        self.inner.cleanup_orphaned_sessions(idle_timeout).await
     }
 
     async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {

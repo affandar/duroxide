@@ -1,5 +1,8 @@
 # Activity Implicit Sessions
 
+> **⚠️ Superseded** by [Activity Implicit Sessions v2](activity-implicit-sessions-v2.md).
+> This document is retained for historical reference. The v2 proposal is the accepted design.
+
 **Status:** Draft  
 **Created:** 2026-02-14  
 
@@ -79,10 +82,10 @@ The activity uses this to look up or create process-local state:
 
 ```rust
 RuntimeOptions {
-    /// Maximum number of sessions this worker will own concurrently.
-    /// Worker skips unclaimed sessions when at capacity.
+    /// Maximum number of distinct sessions this runtime will own concurrently,
+    /// spanning all `worker_concurrency` slots.
     /// Default: 100. Set to 0 to never accept session work.
-    max_sessions_per_worker: usize,
+    max_sessions_per_runtime: usize,
 
     /// How long a session lock persists after the last activity for that
     /// session is fetched or renewed. If no activity for a session occurs
@@ -619,7 +622,7 @@ match ctx.select2(user_input, migration).await {
 1. Add `session_id: Option<String>` to `Action::CallActivity`, `EventKind::ActivityScheduled`, `WorkItem::ActivityExecute`
 2. Add `.on_session()` modifier to `DurableFuture`
 3. Add `session_id()` getter to `ActivityContext`
-4. Add `max_sessions_per_worker` and `session_lock_timeout` to `RuntimeOptions`
+4. Add `max_sessions_per_runtime` and `session_lock_timeout` to `RuntimeOptions`
 5. Update `Provider::fetch_work_item` signature with `worker_id` and `max_sessions`
 6. Add SQLite migration: `sessions` table, `worker_queue.session_id` column
 7. Implement session-aware fetch query in SQLite provider
@@ -635,7 +638,7 @@ match ctx.select2(user_input, migration).await {
 
 1. **`session_lock_timeout` default** — 5 minutes feels right for the copilot use case (turns happen within seconds). For longer-idle workloads, users would increase this. Is 5 minutes a good default?
 
-2. **`max_sessions_per_worker` default** — 100 is arbitrary. Should this be proportional to `worker_concurrency`? Or is a flat limit simpler?
+2. **`max_sessions_per_runtime` default** — 100 is arbitrary. Should this be proportional to `worker_concurrency`? Or is a flat limit simpler?
 
 3. **Interaction with activity tags** — If both features ship, can an activity have both `.on_session()` and `.with_tag()`? Semantically: tag selects the worker pool, session selects the worker within the pool. This is composable but the `fetch_work_item` query becomes complex.
 

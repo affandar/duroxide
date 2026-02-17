@@ -4,7 +4,7 @@
 
 use duroxide::providers::{
     DispatcherCapabilityFilter, ExecutionMetadata, OrchestrationItem, Provider, ProviderError,
-    ScheduledActivityIdentifier, WorkItem,
+    ScheduledActivityIdentifier, SessionFetchConfig, WorkItem,
 };
 use duroxide::runtime::registry::ActivityRegistry;
 use duroxide::runtime::{self, RuntimeOptions};
@@ -70,9 +70,13 @@ impl Provider for LongPollingSqliteProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        session: Option<&SessionFetchConfig>,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
+        // Clone session config for use in closure iterations
+        let session_owned = session.cloned();
         self.poll_until(poll_timeout, || {
-            self.inner.fetch_work_item(lock_timeout, Duration::ZERO)
+            self.inner
+                .fetch_work_item(lock_timeout, Duration::ZERO, session_owned.as_ref())
         })
         .await
     }
@@ -146,6 +150,19 @@ impl Provider for LongPollingSqliteProvider {
         ignore_attempt: bool,
     ) -> Result<(), ProviderError> {
         self.inner.abandon_work_item(token, delay, ignore_attempt).await
+    }
+
+    async fn renew_session_lock(
+        &self,
+        owner_ids: &[&str],
+        extend_for: Duration,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError> {
+        self.inner.renew_session_lock(owner_ids, extend_for, idle_timeout).await
+    }
+
+    async fn cleanup_orphaned_sessions(&self, idle_timeout: Duration) -> Result<usize, ProviderError> {
+        self.inner.cleanup_orphaned_sessions(idle_timeout).await
     }
 
     async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {

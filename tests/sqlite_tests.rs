@@ -98,6 +98,7 @@ async fn test_sqlite_provider_basic() {
             EventKind::ActivityScheduled {
                 name: "TestActivity".to_string(),
                 input: "test-input".to_string(),
+                session_id: None,
             },
         ),
     ];
@@ -284,6 +285,7 @@ async fn test_sqlite_basic_persistence() {
                 id: 1,
                 name: "TestActivity".to_string(),
                 input: "test-input".to_string(),
+                session_id: None,
             })
             .await
             .expect("Failed to enqueue worker work");
@@ -295,6 +297,7 @@ async fn test_sqlite_basic_persistence() {
                 id: 2,
                 name: "TestActivity2".to_string(),
                 input: "test-input-2".to_string(),
+                session_id: None,
             })
             .await
             .expect("Failed to enqueue worker work 2");
@@ -312,7 +315,7 @@ async fn test_sqlite_basic_persistence() {
 
         // Dequeue and verify items
         let (item1, token1, _) = store
-            .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .expect("Fetch should succeed")
             .expect("Should have first item");
@@ -325,7 +328,7 @@ async fn test_sqlite_basic_persistence() {
         }
 
         let (item2, token2, _) = store
-            .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+            .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
             .await
             .expect("Fetch should succeed")
             .expect("Should have second item");
@@ -366,7 +369,7 @@ async fn test_sqlite_basic_persistence() {
         // Verify no more items
         assert!(
             store
-                .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+                .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
                 .await
                 .unwrap()
                 .is_none()
@@ -613,6 +616,7 @@ async fn test_sqlite_provider_transactional() {
             EventKind::ActivityScheduled {
                 name: "Activity1".to_string(),
                 input: "{}".to_string(),
+                session_id: None,
             },
         ),
         Event::with_event_id(
@@ -623,6 +627,7 @@ async fn test_sqlite_provider_transactional() {
             EventKind::ActivityScheduled {
                 name: "Activity2".to_string(),
                 input: "{}".to_string(),
+                session_id: None,
             },
         ),
         Event::with_event_id(
@@ -633,6 +638,7 @@ async fn test_sqlite_provider_transactional() {
             EventKind::ActivityScheduled {
                 name: "Activity3".to_string(),
                 input: "{}".to_string(),
+                session_id: None,
             },
         ),
     ];
@@ -644,6 +650,7 @@ async fn test_sqlite_provider_transactional() {
             id: 1,
             name: "Activity1".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         },
         WorkItem::ActivityExecute {
             instance: instance.to_string(),
@@ -651,6 +658,7 @@ async fn test_sqlite_provider_transactional() {
             id: 2,
             name: "Activity2".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         },
         WorkItem::ActivityExecute {
             instance: instance.to_string(),
@@ -658,6 +666,7 @@ async fn test_sqlite_provider_transactional() {
             id: 3,
             name: "Activity3".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         },
     ];
 
@@ -682,7 +691,7 @@ async fn test_sqlite_provider_transactional() {
     // Verify all worker items enqueued
     let mut worker_count = 0;
     while let Some((work_item, token, _)) = store
-        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
     {
@@ -815,6 +824,7 @@ async fn test_execution_status_running() {
             EventKind::ActivityScheduled {
                 name: "TestActivity".to_string(),
                 input: "test".to_string(),
+                session_id: None,
             },
         ),
     ];

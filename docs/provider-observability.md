@@ -264,3 +264,15 @@ tracing::info!(
 - [Provider Implementation Guide](provider-implementation-guide.md) - For building providers
 - [src/providers/sqlite.rs](../src/providers/sqlite.rs) - Reference implementation
 
+## Session Instrumentation
+
+Session-related provider methods should be instrumented alongside existing methods:
+
+| Method | Operation Name | Notes |
+|--------|---------------|-------|
+| `renew_session_lock()` | `renew_session_lock` | Records duration + count of sessions renewed |
+| `cleanup_orphaned_sessions()` | `cleanup_orphaned_sessions` | Records duration + count of sessions cleaned |
+
+The `InstrumentedProvider` wrapper automatically instruments these methods when wrapping
+a provider with metrics enabled. See `src/providers/instrumented.rs`.
+

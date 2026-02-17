@@ -239,10 +239,10 @@ async fn run_turn(ctx: ActivityContext, input: String) -> Result<String, String>
 
 ```rust
 RuntimeOptions {
-    /// Maximum number of sessions this worker will own concurrently.
-    /// Worker skips unclaimed sessions when at capacity.
+    /// Maximum number of distinct sessions this runtime will own concurrently,
+    /// spanning all `worker_concurrency` slots.
     /// Default: 100. Set to 0 to never accept session work.
-    max_sessions_per_worker: usize,
+    max_sessions_per_runtime: usize,
 
     /// Session lock duration for liveness detection.
     /// The session lock in the provider expires after this duration.
@@ -689,10 +689,10 @@ async fn fetch_session_work_item(
 
 The worker dispatcher chooses which variant to call:
 - If the provider doesn't support sessions: always `fetch_work_item`
-- If the provider supports sessions and worker is below `max_sessions_per_worker`: `fetch_session_work_item`
+- If the provider supports sessions and worker is below `max_sessions_per_runtime`: `fetch_session_work_item`
 - If the provider supports sessions but worker is at session capacity: `fetch_work_item` (only non-session work)
 
-The `max_sessions_per_worker` limit is tracked runtime-side (the worker knows how many sessions it owns based on active renewal tasks), not passed to the provider.
+The `max_sessions_per_runtime` limit is tracked runtime-side (the worker knows how many sessions it owns based on active renewal tasks), not passed to the provider.
 
 **`renew_work_item_lock`** — signature unchanged, but implementation piggybacks session lock renewal:
 ```rust
@@ -863,8 +863,9 @@ Session-related events and work-item fields use `#[serde(skip_serializing_if = "
 
 ```rust
 RuntimeOptions {
-    /// Maximum sessions this worker will own concurrently. Default: 100.
-    max_sessions_per_worker: usize,
+    /// Maximum distinct sessions this runtime will own concurrently,
+    /// spanning all worker slots. Default: 100.
+    max_sessions_per_runtime: usize,
 
     /// Session lock duration for liveness detection. Controls crash recovery speed.
     /// Lock renewed every duration/2. Default: 2 * worker_lock_timeout (e.g., 60s).
@@ -892,7 +893,7 @@ RuntimeOptions {
 4. Add `session_id: Option<String>` to `Action::CallActivity`, `EventKind::ActivityScheduled`, `WorkItem::ActivityExecute`
 5. Add `schedule_activity_on_session()` and `schedule_activity_on_session_typed()` to `OrchestrationContext`
 6. Add `session_id()` getter to `ActivityContext`
-7. Add `max_sessions_per_worker` and `session_lock_timeout` to `RuntimeOptions`
+7. Add `max_sessions_per_runtime` and `session_lock_timeout` to `RuntimeOptions`
 8. Add `sessions` table and `worker_queue.session_id` column (SQLite migration)
 9. Add `renew_session_lock` to Provider trait
 10. Implement session-aware `fetch_work_item` query
@@ -967,7 +968,7 @@ The current `runtime_id` is a 4-char hex derived from nanoseconds (`{:04x}` of `
 |---|------|-------------|
 | 3.1 | `two_workers_claim_different_sessions` | Two runtimes sharing a provider. Session A claimed by worker 1, session B by worker 2. Activities route correctly. |
 | 3.2 | `session_exclusively_owned` | Two workers compete for same session. Only one claims it. All activities for that session go to the owner. |
-| 3.3 | `max_sessions_per_worker_enforced` | Worker with `max_sessions_per_worker: 2`. Open 3 sessions. Third session's activities are picked up by a different worker (if available) or wait. |
+| 3.3 | `max_sessions_per_runtime_enforced` | Worker with `max_sessions_per_runtime: 2`. Open 3 sessions. Third session's activities are picked up by a different worker (if available) or wait. |
 | 3.4 | `at_capacity_worker_still_processes_nonsession` | Worker at session capacity still fetches and processes non-session activities. |
 | 3.5 | `at_capacity_worker_still_processes_owned_sessions` | Worker at session capacity still processes activities for sessions it already owns. |
 

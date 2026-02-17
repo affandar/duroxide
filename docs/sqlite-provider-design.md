@@ -78,7 +78,17 @@ CREATE TABLE worker_queue (
     locked_until TIMESTAMP,
     attempt_count INTEGER NOT NULL DEFAULT 0,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_available (visible_at, lock_token, id)
+    session_id TEXT,                  -- Session affinity routing key
+    INDEX idx_available (visible_at, lock_token, id),
+    INDEX idx_session (session_id)
+);
+
+-- Session affinity tracking (flow table)
+CREATE TABLE sessions (
+    session_id     TEXT PRIMARY KEY,  -- Flow key
+    worker_id      TEXT NOT NULL,     -- Owning backend
+    locked_until   INTEGER NOT NULL,  -- Heartbeat lease expiry
+    last_activity_at INTEGER NOT NULL -- Last activity flow timestamp
 );
 ```
 
@@ -88,6 +98,7 @@ CREATE TABLE worker_queue (
 2. **Lock tokens with expiry** for crash recovery
 3. **Visibility timestamps** for delayed message processing
 4. **Normalized schema** for efficient queries and updates
+5. **Session table as a flow table** — routes session-bound activities to owning workers (analogous to network flow affinity)
 5. **JSON storage** for flexible event/work item serialization
 
 ## Implementation Plan

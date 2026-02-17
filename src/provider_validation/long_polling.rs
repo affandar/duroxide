@@ -103,7 +103,7 @@ pub async fn test_short_poll_work_item_returns_immediately(provider: &dyn Provid
 
     let start = Instant::now();
     let result = provider
-        .fetch_work_item(lock_timeout, poll_timeout)
+        .fetch_work_item(lock_timeout, poll_timeout, None)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();
@@ -127,7 +127,7 @@ pub async fn test_long_poll_work_item_waits_for_timeout(provider: &dyn Provider)
 
     let start = Instant::now();
     let result = provider
-        .fetch_work_item(lock_timeout, poll_timeout)
+        .fetch_work_item(lock_timeout, poll_timeout, None)
         .await
         .expect("Fetch failed");
     let elapsed = start.elapsed();

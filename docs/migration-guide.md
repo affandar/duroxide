@@ -275,6 +275,14 @@ To make future migrations easier:
 4. **Document assumptions** and invariants
 5. **Test with multiple versions** in CI/CD
 
+## Session Affinity Notes
+
+Sessions are backward-compatible by design:
+- Existing `schedule_activity` calls are unaffected (`session_id = None`)
+- Old `ActivityScheduled` events without `session_id` deserialize with `session_id = None` via `#[serde(default)]`
+- Provider schema migration: add `session_id` column to `worker_queue`, create `sessions` table
+- No changes required to existing orchestration or activity code
+
 ## Getting Help
 
 For migration assistance:

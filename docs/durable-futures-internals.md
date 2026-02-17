@@ -568,6 +568,14 @@ In history, these appear as normal activity events (with a reserved activity nam
 
 On replay, the engine re-delivers the recorded completion value, so the orchestration observes the same GUID/time.
 
+### Session Affinity: Routing Activities to Specific Workers
+
+`Action::CallActivity` includes an optional `session_id`. When present, the replay engine
+flows it through `ActivityScheduled` events and `WorkItem::ActivityExecute`. The replay
+engine treats `session_id` as opaque data — it participates in action matching (ensuring
+replay determinism) but doesn't affect the replay algorithm itself. Session routing is
+handled entirely by the provider's `fetch_work_item` implementation.
+
 ### continue_as_new: Preventing Unbounded History Growth
 
 Long-running orchestrations (like actors or state machines) can accumulate huge histories. `continue_as_new()` resets the history:

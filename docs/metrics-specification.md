@@ -461,6 +461,12 @@ topk(5,
 
 ## 3. Sub-Orchestration Metrics
 
+> **Session Metrics (Future):** Session-specific metrics (session claims, migrations,
+> renewals, cleanup counts) are not yet instrumented. The `InstrumentedProvider`
+> wrapper records `renew_session_lock` and `cleanup_orphaned_sessions` as provider
+> operation duration metrics, but session-level counters with `session_id` labels
+> are deferred to a future iteration.
+
 ### 3.1 `duroxide_suborchestration_calls_total` (Counter)
 
 **Description:** Sub-orchestration invocations

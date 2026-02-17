@@ -167,6 +167,7 @@ pub async fn test_delete_cleans_queues_and_locks<F: ProviderFactory>(factory: &F
             id: 1,
             name: "TestActivity".to_string(),
             input: "{}".to_string(),
+            session_id: None,
         })
         .await
         .unwrap();
@@ -998,6 +999,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
                     EventKind::ActivityScheduled {
                         name: "OldActivity".to_string(),
                         input: "old-input".to_string(),
+                        session_id: None,
                     },
                 ),
             ],
@@ -1007,6 +1009,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
                 id: 2,
                 name: "OldActivity".to_string(),
                 input: "old-input".to_string(),
+                session_id: None,
             }],
             vec![],
             ExecutionMetadata {
@@ -1021,7 +1024,7 @@ pub async fn test_stale_activity_after_delete_recreate<F: ProviderFactory>(facto
 
     // Step 2: Worker fetches the activity (holds the lock)
     let (_work_item, old_worker_lock, _) = provider
-        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

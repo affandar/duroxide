@@ -86,6 +86,26 @@ pub struct ScheduledActivityIdentifier {
     pub activity_id: u64,
 }
 
+/// Configuration for session-aware work item fetching.
+///
+/// When passed to [`Provider::fetch_work_item`], enables session routing:
+/// - Non-session items (`session_id IS NULL`) are always eligible
+/// - Items for sessions already owned by `owner_id` are eligible
+/// - Items for unowned (claimable) sessions are eligible
+///
+/// When `fetch_work_item` is called with `session: None`, only non-session
+/// items are returned.
+#[derive(Debug, Clone)]
+pub struct SessionFetchConfig {
+    /// Identity tag for session ownership. All worker slots sharing this
+    /// value are treated as a single owner for session affinity purposes.
+    /// Typically set to `RuntimeOptions::worker_node_id` (process-level)
+    /// or a per-slot UUID (ephemeral).
+    pub owner_id: String,
+    /// How long to hold the session lock when claiming a new session.
+    pub lock_timeout: Duration,
+}
+
 /// Orchestration item containing all data needed to process an instance atomically.
 ///
 /// This represents a locked batch of work for a single orchestration instance.
@@ -176,7 +196,7 @@ pub struct OrchestrationItem {
 ///
 /// * `status` - New execution status: `Some("Completed")`, `Some("Failed")`, `Some("ContinuedAsNew")`, or `None`
 ///   - `None` means the execution is still running (no status update needed)
-///   - Provider should UPDATE the execution status column when `Some(...)`
+///   - Provider should update the stored execution status when `Some(...)`
 ///
 /// * `output` - The terminal value to store (depends on status):
 ///   - `Completed`: The orchestration's successful result
@@ -212,8 +232,8 @@ pub struct OrchestrationItem {
 ///
 /// Provider responsibilities:
 /// - Use the explicit `execution_id` given to `ack_orchestration_item`.
-/// - Idempotently create the execution record/entry (e.g., SQL: `INSERT OR IGNORE` / `UPSERT`).
-/// - Update the instance's “current execution” pointer to be at least `execution_id` (e.g., SQL: `current_execution_id = MAX(current_execution_id, execution_id)`).
+/// - Idempotently create the execution record/entry if it doesn't already exist.
+/// - Update the instance's “current execution” pointer to be at least `execution_id`.
 /// - Append all `history_delta` events to the specified `execution_id`.
 /// - Update `executions.status, executions.output` from `ExecutionMetadata` when provided.
 #[derive(Debug, Clone, Default)]
@@ -230,12 +250,11 @@ pub struct ExecutionMetadata {
     pub parent_instance_id: Option<String>,
     /// Pinned duroxide version for this execution (set from OrchestrationStarted event).
     ///
-    /// The provider stores this as three integer columns (`duroxide_version_major`,
-    /// `duroxide_version_minor`, `duroxide_version_patch`) on the executions table for
-    /// efficient capability filtering.
+    /// The provider stores this alongside the execution record for efficient
+    /// capability filtering.
     ///
     /// - `Some(v)`: Store `v` as the execution's pinned version. The provider should
-    ///   update the columns unconditionally when provided.
+    ///   update the stored version unconditionally when provided.
     /// - `None`: No version update requested. The provider should not modify the
     ///   existing stored value.
     ///
@@ -304,6 +323,9 @@ pub enum WorkItem {
         id: u64, // scheduling_event_id from ActivityScheduled
         name: String,
         input: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        session_id: Option<String>,
     },
 
     /// Activity completed successfully (goes to orchestrator queue)
@@ -938,9 +960,9 @@ pub trait Provider: Any + Send + Sync {
     /// and data corruption.
     ///
     /// **Required Implementation Pattern:**
-    /// 1. Find available instance (join with `instance_locks` table to check lock status)
-    /// 2. Atomically acquire instance lock (INSERT into `instance_locks` with conflict handling)
-    /// 3. Verify lock acquisition succeeded (check rows_affected)
+    /// 1. Find available instance (check no other lock is held for it)
+    /// 2. Atomically acquire instance lock (with conflict handling)
+    /// 3. Verify lock acquisition succeeded
     /// 4. Only then proceed to lock and fetch messages
     ///
     /// See `docs/provider-implementation-guide.md` for detailed implementation guidance.
@@ -962,11 +984,11 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// **CRITICAL:** All messages in the batch must belong to the SAME instance.
     ///
-    /// SQLite implementation:
-    /// 1. Find first visible unlocked instance: `SELECT q.instance_id FROM orchestrator_queue q LEFT JOIN instance_locks il ON q.instance_id = il.instance_id WHERE q.visible_at <= now() AND (il.instance_id IS NULL OR il.locked_until <= now()) ORDER BY q.id LIMIT 1`
-    /// 2. Atomically acquire instance lock: `INSERT INTO instance_locks (instance_id, lock_token, locked_until, locked_at) VALUES (?, ?, ?, ?) ON CONFLICT(instance_id) DO UPDATE SET ... WHERE locked_until <= ?`
-    /// 3. Lock ALL messages for that instance: `UPDATE orchestrator_queue SET lock_token = ? WHERE instance_id = ? AND visible_at <= now()`
-    /// 4. Fetch all locked messages: `SELECT * FROM orchestrator_queue WHERE lock_token = ?`
+    /// Implementation steps:
+    /// 1. Find the first visible, unlocked instance in the orchestrator queue
+    /// 2. Atomically acquire the instance lock (prevent concurrent processing)
+    /// 3. Lock ALL queued messages for that instance
+    /// 4. Fetch all locked messages for processing
     ///
     /// # History Loading
     ///
@@ -993,7 +1015,7 @@ pub trait Provider: Any + Send + Sync {
     /// # Error Handling
     ///
     /// Don't panic on transient errors - return None and let dispatcher retry.
-    /// Only panic on unrecoverable errors (e.g., corrupted database schema).
+    /// Only panic on unrecoverable errors (e.g., corrupted data or schema).
     ///
     /// # Concurrency
     ///
@@ -1055,7 +1077,7 @@ pub trait Provider: Any + Send + Sync {
     ///   - `lock_token`: Unique token for ack/abandon operations
     ///   - `attempt_count`: Number of times this item has been fetched (for poison detection)
     /// * `Ok(None)` - No work available
-    /// * `Err(ProviderError)` - Database error
+    /// * `Err(ProviderError)` - Storage error
     async fn fetch_orchestration_item(
         &self,
         lock_timeout: Duration,
@@ -1070,20 +1092,20 @@ pub trait Provider: Any + Send + Sync {
     /// # What This Does (ALL must be atomic)
     ///
     /// 1. **Validate lock token**: Verify instance lock is still valid and matches lock_token
-    /// 2. **Remove instance lock**: Delete from `instance_locks` table (processing complete)
+    /// 2. **Remove instance lock**: Release the instance lock (processing complete)
     /// 3. **Append new events** to history for current execution
     /// 4. **Update execution metadata** (status, output) using pre-computed metadata
     /// 5. **Create new execution** if metadata.create_next_execution=true (ContinueAsNew)
     /// 6. **Enqueue worker_items** to worker queue (activity executions)
     /// 7. **Enqueue orchestrator_items** to orchestrator queue (completions, new instances, TimerFired with delayed visibility)
-    /// 8. **Delete acknowledged messages** from orchestrator queue (release lock)
+    /// 8. **Remove acknowledged messages** from orchestrator queue (release lock)
     ///
     /// # Atomicity Requirements
     ///
     /// **CRITICAL:** All 8 operations above must succeed or fail together.
     ///
-    /// - **If ANY operation fails**: Roll back the entire transaction
-    /// - **If commit succeeds**: All changes are durable and visible
+    /// - **If ANY operation fails**: Roll back all changes
+    /// - **If all operations succeed**: All changes are durable and visible
     ///
     /// This prevents:
     /// - Duplicate activity execution (history saved but worker item lost)
@@ -1164,21 +1186,18 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Lock Release
     ///
-    /// Delete all messages with this lock_token:
-    /// ```text
-    /// DELETE FROM orchestrator_queue WHERE lock_token = ?
-    /// ```
+    /// Remove all acknowledged messages associated with this lock_token.
     ///
     /// # Error Handling
     ///
     /// - Return `Ok(())` if all operations succeeded
-    /// - Return `Err(msg)` if any operation failed (transaction rolled back)
+    /// - Return `Err(msg)` if any operation failed (all changes rolled back)
     /// - On error, runtime will call `abandon_orchestration_item()` to release lock
     ///
     /// # Special Cases
     ///
     /// **StartOrchestration in orchestrator_items:**
-    /// - May need to create instance metadata record/entry (e.g., SQL: `INSERT OR IGNORE` / `UPSERT`)
+    /// - May need to create instance metadata record/entry (idempotent create-if-not-exists)
     /// - Should create execution record/entry with ID=1 if new instance
     ///
     /// **Empty history_delta:**
@@ -1210,9 +1229,9 @@ pub trait Provider: Any + Send + Sync {
     /// - Ensuring each execution has its own isolated history
     ///
     /// The provider should:
-    /// - **Create the execution record if it doesn't exist** (idempotent INSERT OR IGNORE)
+    /// - **Create the execution record if it doesn't exist** (idempotent create-if-not-exists)
     /// - Append `history_delta` to the specified `execution_id`
-    /// - Update `instances.current_execution_id` if this execution_id is newer
+    /// - Update the instance's current execution pointer if this execution_id is newer
     /// - NOT inspect WorkItems to decide execution IDs
     ///
     /// # SQLite Implementation Pattern
@@ -1294,13 +1313,13 @@ pub trait Provider: Any + Send + Sync {
 
     /// Abandon orchestration processing (used for errors/retries).
     ///
-    /// Called when orchestration processing fails (e.g., database busy, runtime crash).
+    /// Called when orchestration processing fails (e.g., storage contention, runtime crash).
     /// The messages must be made available for reprocessing.
     ///
     /// # What This Does
     ///
     /// 1. **Clear lock_token** from messages (make available again)
-    /// 2. **Remove instance lock** from `instance_locks` table
+    /// 2. **Remove instance lock** (release instance-level lock)
     /// 3. **Optionally delay** retry by setting visibility timestamp
     /// 4. **Preserve message order** (don't reorder or modify messages)
     ///
@@ -1345,7 +1364,7 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// # Use Cases
     ///
-    /// - Database contention (SQLITE_BUSY) → delay = Some(Duration::from_millis(50)) for backoff
+    /// - Storage contention → delay = Some(Duration::from_millis(50)) for backoff
     /// - Orchestration turn failed → delay = None for immediate retry
     /// - Runtime shutdown during processing → messages auto-recover when lock expires
     ///
@@ -1355,7 +1374,7 @@ pub trait Provider: Any + Send + Sync {
     /// should not be idempotent for invalid tokens. Invalid tokens indicate a programming error or
     /// state corruption and should be surfaced as errors.
     ///
-    /// Return `Err("Invalid lock token")` if the lock token is not found in `instance_locks`.
+    /// Return `Err("Invalid lock token")` if the lock token is not recognized or has expired.
     ///
     /// # Parameters
     ///
@@ -1523,6 +1542,9 @@ pub trait Provider: Any + Send + Sync {
     /// - `lock_timeout`: Duration to lock the item for processing.
     /// - `poll_timeout`: Maximum time to wait for work. Provider MAY wait up to this
     ///   duration if it supports long polling, or return immediately if it doesn't.
+    /// - `session`: Session routing configuration.
+    ///   - `Some(config)`: Session-aware fetch — returns non-session + owned + claimable session items.
+    ///   - `None`: Non-session only — returns only items with `session_id IS NULL`.
     ///
     /// # Return Value
     ///
@@ -1531,15 +1553,29 @@ pub trait Provider: Any + Send + Sync {
     ///   - String: Lock token for ack/abandon
     ///   - u32: Attempt count (number of times this item has been fetched)
     /// - `Ok(None)` - No work available
-    /// - `Err(ProviderError)` - Database error (allows runtime to distinguish empty queue from failures)
+    /// - `Err(ProviderError)` - Storage error (allows runtime to distinguish empty queue from failures)
     ///
     /// # Concurrency
     ///
     /// Called continuously by work dispatcher. Must prevent double-dequeue.
+    ///
+    /// # Session Routing
+    ///
+    /// When `session` is `Some(config)`, the provider must filter eligible items:
+    /// - Non-session items (`session_id IS NULL`): always eligible
+    /// - Owned-session items: items whose `session_id` has an active session owned by `config.owner_id`
+    /// - Claimable-session items: items whose `session_id` has no active session (unowned)
+    ///
+    /// When fetching a claimable session-bound item, atomically create or update the session
+    /// record with `config.owner_id` and `config.lock_timeout`.
+    ///
+    /// When `session` is `None`, only non-session items (`session_id IS NULL`) are returned.
+    /// Session-bound items are skipped entirely.
     async fn fetch_work_item(
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        session: Option<&SessionFetchConfig>,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError>;
 
     /// Acknowledge successful processing of a work item.
@@ -1558,8 +1594,8 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// * `token` - Lock token from fetch_work_item
     /// * `completion` - Optional completion work item:
-    ///   - `Some(WorkItem)`: Delete worker item AND enqueue completion to orchestrator queue
-    ///   - `None`: Delete worker item WITHOUT enqueueing anything (used when activity was cancelled)
+    ///   - `Some(WorkItem)`: Remove worker item AND enqueue completion to orchestrator queue
+    ///   - `None`: Remove worker item WITHOUT enqueueing anything (used when activity was cancelled)
     ///
     /// # Error on Missing Entry
     ///
@@ -1568,6 +1604,7 @@ pub trait Provider: Any + Send + Sync {
     /// This can happen when:
     /// - The activity was cancelled (the backing entry was removed/invalidated by orchestration)
     /// - The lock was stolen by another worker (lock expired and work-item was re-fetched/completed)
+    /// - The lock expired (worker took too long without renewing)
     ///
     /// The worker dispatcher uses this error to detect cancellation races and log appropriately.
     ///
@@ -1577,12 +1614,12 @@ pub trait Provider: Any + Send + Sync {
     /// async fn ack_work_item(&self, token: &str, completion: Option<WorkItem>) -> Result<(), ProviderError> {
     ///     BEGIN TRANSACTION
     ///         // Relational/SQL example:
-    ///         let result = DELETE FROM worker_queue WHERE lock_token = ?token;
+    ///         let result = DELETE FROM worker_queue WHERE lock_token = ?token AND locked_until > now();
     ///         
-    ///         // CRITICAL: Check if the locked entry existed
+    ///         // CRITICAL: Check if the locked entry existed and lock was still valid
     ///         if result.rows_affected == 0 {
     ///             ROLLBACK
-    ///             return Err(ProviderError::permanent("Work item not found - cancelled or stolen"))
+    ///             return Err(ProviderError::permanent("Work item not found - cancelled, stolen, or lock expired"))
     ///         }
     ///         
     ///         if let Some(completion) = completion {
@@ -1613,8 +1650,8 @@ pub trait Provider: Any + Send + Sync {
     ///
     /// This method also serves as the cancellation detection mechanism. When the
     /// orchestration runtime decides an activity should be cancelled, it removes or invalidates
-    /// the backing entry for that locked work-item (often implemented in SQL/relational stores as
-    /// deleting the corresponding row). The next renewal attempt will fail, signaling to the
+    /// the backing entry for that locked work-item (e.g., by
+    /// removing the corresponding entry). The next renewal attempt will fail, signaling to the
     /// worker that the activity should be cancelled.
     ///
     /// # Parameters
@@ -1627,7 +1664,7 @@ pub trait Provider: Any + Send + Sync {
     /// * `Ok(())` - Lock renewed successfully
     /// * `Err(ProviderError)` - Lock renewal failed:
     ///   - Permanent error: Token invalid, expired, entry removed (cancelled), or already acked
-    ///   - Retryable error: Database connection issues
+    ///   - Retryable error: Storage connection issues
     ///
     /// # Implementation Pattern
     ///
@@ -1660,9 +1697,54 @@ pub trait Provider: Any + Send + Sync {
     /// - Stops automatically when activity completes or worker crashes
     async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError>;
 
+    /// Heartbeat all non-idle sessions owned by the given workers.
+    ///
+    /// Extends `locked_until` for sessions where:
+    /// - `owner_id` matches any of the provided `owner_ids`
+    /// - `locked_until > now` (still owned)
+    /// - `last_activity_at + idle_timeout > now` (not idle)
+    ///
+    /// Sessions that are idle (no recent activity flow) are NOT renewed,
+    /// causing their locks to naturally expire.
+    ///
+    /// Accepts a slice of owner IDs so the provider can batch the operation
+    /// into a single storage call.
+    ///
+    /// # Returns
+    ///
+    /// Total count of sessions renewed across all owners.
+    async fn renew_session_lock(
+        &self,
+        owner_ids: &[&str],
+        extend_for: Duration,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError>;
+
+    /// Sweep orphaned session entries.
+    ///
+    /// This is a convenience hook so providers don't need background threads for
+    /// a common cleanup scenario. The runtime calls it periodically on behalf of
+    /// all workers.
+    ///
+    /// Removes sessions where:
+    /// - `locked_until < now` (lock expired)
+    /// - No pending work items reference this session
+    ///
+    /// Any worker can sweep any worker's orphans.
+    ///
+    /// Providers that already clean up expired/ownerless sessions internally
+    /// (e.g., via TTL, background sweeps, or eager eviction on fetch) may
+    /// return `Ok(0)` here.
+    ///
+    /// # Returns
+    ///
+    /// Count of sessions removed (0 is valid if no orphans exist or the
+    /// provider handles cleanup through other means).
+    async fn cleanup_orphaned_sessions(&self, idle_timeout: Duration) -> Result<usize, ProviderError>;
+
     /// Abandon work item processing (release lock without completing).
     ///
-    /// Called when activity processing fails with a retryable error (e.g., database busy)
+    /// Called when activity processing fails with a retryable error (e.g., storage contention)
     /// and the work item should be made available for another worker to pick up.
     ///
     /// # What This Does
@@ -2221,30 +2303,30 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///
     /// # Provider Contract (MUST implement)
     ///
-    /// 1. **Atomicity**: All deletions MUST be atomic (all-or-nothing in a single transaction).
+    /// 1. **Atomicity**: All deletions MUST be atomic (all-or-nothing).
     ///    If any instance fails validation, the entire batch MUST be rolled back.
     ///
     /// 2. **Force semantics**:
     ///    - `force=false`: Return error if ANY instance has `status = 'Running'`
     ///    - `force=true`: Delete regardless of status (for stuck/abandoned instances)
     ///
-    /// 3. **Orphan detection**: Within the transaction, check for children not in `ids`:
+    /// 3. **Orphan detection**: Atomically check for children not in `ids`:
     ///    ```sql
     ///    SELECT instance_id FROM instances
     ///    WHERE parent_instance_id IN (?) AND instance_id NOT IN (?)
     ///    ```
     ///    If any exist, return error (race condition: new child spawned after get_instance_tree).
     ///
-    /// 4. **Complete cleanup**: Delete from ALL related tables in single transaction:
-    ///    - `history` (events)
-    ///    - `executions`
-    ///    - `orchestrator_queue`
-    ///    - `worker_queue`
-    ///    - `instance_locks`
-    ///    - `instances`
+    /// 4. **Complete cleanup**: Remove ALL related data in a single atomic operation:
+    ///    - event history
+    ///    - executions
+    ///    - orchestrator queue entries
+    ///    - worker queue entries
+    ///    - instance locks
+    ///    - instance metadata
     ///
-    /// 5. **Prevent ack recreation**: When force-deleting Running instances, the deletion
-    ///    of `instance_locks` prevents in-flight `ack_orchestration_item` from recreating state.
+    /// 5. **Prevent ack recreation**: When force-deleting Running instances, the removal
+    ///    of the instance lock prevents in-flight `ack_orchestration_item` from recreating state.
     ///
     /// # Race Condition Protection
     ///
@@ -2261,7 +2343,7 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///
     /// # Implementation Notes
     ///
-    /// - Delete from: history, executions, orchestrator_queue, worker_queue, instance_locks, instances
+    /// - Delete all related data: event history, executions, orchestrator queue, worker queue, instance locks, instance metadata
     /// - Order within transaction doesn't matter for correctness (single atomic transaction)
     /// - Count deletions and aggregate into result
     async fn delete_instances_atomic(&self, ids: &[String], force: bool)
@@ -2309,7 +2391,7 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///
     /// * `instance_id` - The ID of the instance to delete.
     /// * `force` - If true, delete even if the instance is in Running state.
-    ///   WARNING: Force delete only removes database state; it does NOT cancel
+    ///   WARNING: Force delete only removes stored state; it does NOT cancel
     ///   in-flight tokio tasks. Use `cancel_instance` first for graceful termination.
     ///
     /// # Returns
@@ -2325,7 +2407,7 @@ pub trait ProviderAdmin: Any + Send + Sync {
     /// - Deleting a running instance with force=true may cause in-flight operations
     ///   to fail when they try to persist state.
     /// - Sub-orchestrations cannot be deleted directly; delete the root to cascade.
-    /// - The instance_locks table entry is deleted to prevent zombie recreation.
+    /// - The instance lock entry is removed to prevent zombie recreation.
     async fn delete_instance(&self, instance_id: &str, force: bool) -> Result<DeleteInstanceResult, ProviderError> {
         // Step 1: Check if this is a sub-orchestration
         let parent = self.get_parent_id(instance_id).await?;
@@ -2380,15 +2462,14 @@ pub trait ProviderAdmin: Any + Send + Sync {
     ///
     /// # Provider Contract (MUST implement)
     ///
-    /// 1. **Current execution protection**: The execution matching `current_execution_id`
-    ///    from the `instances` table MUST NEVER be pruned, regardless of options.
-    ///    This is enforced by: `WHERE execution_id != current_execution_id`
+    /// 1. **Current execution protection**: The current execution of the instance
+    ///    MUST NEVER be pruned, regardless of options.
     ///
-    /// 2. **Running execution protection**: Executions with `status = 'Running'`
-    ///    MUST NEVER be pruned: `WHERE status != 'Running'`
+    /// 2. **Running execution protection**: Executions with status 'Running'
+    ///    MUST NEVER be pruned.
     ///
     /// 3. **Atomicity**: All deletions for a single prune call MUST be atomic
-    ///    (all-or-nothing within a transaction).
+    ///    (all-or-nothing).
     ///
     /// # `keep_last` Semantics
     ///

@@ -11,7 +11,7 @@ use duroxide::providers::error::ProviderError;
 use duroxide::providers::sqlite::SqliteProvider;
 use duroxide::providers::{
     DispatcherCapabilityFilter, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin,
-    ScheduledActivityIdentifier, WorkItem,
+    ScheduledActivityIdentifier, SessionFetchConfig, WorkItem,
 };
 use duroxide::{Event, EventKind};
 use std::sync::Arc;
@@ -147,8 +147,9 @@ impl Provider for PoisonInjectingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        session: Option<&SessionFetchConfig>,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
-        let result = self.inner.fetch_work_item(lock_timeout, poll_timeout).await?;
+        let result = self.inner.fetch_work_item(lock_timeout, poll_timeout, session).await?;
 
         if let Some((item, lock_token, real_attempt_count)) = result {
             // Check if we need to skip this fetch
@@ -222,6 +223,19 @@ impl Provider for PoisonInjectingProvider {
         self.inner.abandon_work_item(token, delay, ignore_attempt).await
     }
 
+    async fn renew_session_lock(
+        &self,
+        owner_ids: &[&str],
+        extend_for: Duration,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError> {
+        self.inner.renew_session_lock(owner_ids, extend_for, idle_timeout).await
+    }
+
+    async fn cleanup_orphaned_sessions(&self, idle_timeout: Duration) -> Result<usize, ProviderError> {
+        self.inner.cleanup_orphaned_sessions(idle_timeout).await
+    }
+
     async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
         self.inner.renew_orchestration_item_lock(token, extend_for).await
     }
@@ -292,8 +306,9 @@ impl Provider for FilterBypassProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        session: Option<&SessionFetchConfig>,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
-        self.inner.fetch_work_item(lock_timeout, poll_timeout).await
+        self.inner.fetch_work_item(lock_timeout, poll_timeout, session).await
     }
 
     async fn ack_orchestration_item(
@@ -345,6 +360,19 @@ impl Provider for FilterBypassProvider {
         ignore_attempt: bool,
     ) -> Result<(), ProviderError> {
         self.inner.abandon_work_item(token, delay, ignore_attempt).await
+    }
+
+    async fn renew_session_lock(
+        &self,
+        owner_ids: &[&str],
+        extend_for: Duration,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError> {
+        self.inner.renew_session_lock(owner_ids, extend_for, idle_timeout).await
+    }
+
+    async fn cleanup_orphaned_sessions(&self, idle_timeout: Duration) -> Result<usize, ProviderError> {
+        self.inner.cleanup_orphaned_sessions(idle_timeout).await
     }
 
     async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
@@ -463,6 +491,7 @@ impl Provider for FailingProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        session: Option<&SessionFetchConfig>,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         if self.fail_next_fetch_work_item.swap(false, Ordering::SeqCst) {
             Err(ProviderError::retryable(
@@ -470,7 +499,7 @@ impl Provider for FailingProvider {
                 "simulated transient infrastructure failure",
             ))
         } else {
-            self.inner.fetch_work_item(lock_timeout, poll_timeout).await
+            self.inner.fetch_work_item(lock_timeout, poll_timeout, session).await
         }
     }
 
@@ -561,6 +590,19 @@ impl Provider for FailingProvider {
         ignore_attempt: bool,
     ) -> Result<(), ProviderError> {
         self.inner.abandon_work_item(token, delay, ignore_attempt).await
+    }
+
+    async fn renew_session_lock(
+        &self,
+        owner_ids: &[&str],
+        extend_for: Duration,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError> {
+        self.inner.renew_session_lock(owner_ids, extend_for, idle_timeout).await
+    }
+
+    async fn cleanup_orphaned_sessions(&self, idle_timeout: Duration) -> Result<usize, ProviderError> {
+        self.inner.cleanup_orphaned_sessions(idle_timeout).await
     }
 
     async fn renew_orchestration_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {

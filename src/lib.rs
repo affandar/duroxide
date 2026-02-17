@@ -433,7 +433,8 @@ pub use runtime::{
 
 // Re-export management types for convenience
 pub use providers::{
-    ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, ScheduledActivityIdentifier, SystemMetrics,
+    ExecutionInfo, InstanceInfo, ProviderAdmin, QueueDepths, ScheduledActivityIdentifier, SessionFetchConfig,
+    SystemMetrics,
 };
 
 // Re-export capability filtering types
@@ -985,7 +986,13 @@ pub enum EventKind {
 
     /// Activity was scheduled.
     #[serde(rename = "ActivityScheduled")]
-    ActivityScheduled { name: String, input: String },
+    ActivityScheduled {
+        name: String,
+        input: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        session_id: Option<String>,
+    },
 
     /// Activity completed successfully with a result.
     #[serde(rename = "ActivityCompleted")]
@@ -1297,6 +1304,9 @@ pub enum Action {
         scheduling_event_id: u64,
         name: String,
         input: String,
+        /// Optional session ID for worker affinity routing.
+        /// When set, the activity is routed to the worker owning this session.
+        session_id: Option<String>,
     },
     /// Create a timer that will fire at the specified absolute time.
     /// scheduling_event_id is the event_id of the TimerCreated event.
@@ -1661,6 +1671,8 @@ pub struct ActivityContext {
     activity_name: String,
     activity_id: u64,
     worker_id: String,
+    /// Optional session ID when scheduled via `schedule_activity_on_session`.
+    session_id: Option<String>,
     /// Cancellation token for cooperative cancellation.
     /// Triggered when the parent orchestration reaches a terminal state.
     cancellation_token: tokio_util::sync::CancellationToken,
@@ -1693,6 +1705,7 @@ impl ActivityContext {
             activity_name,
             activity_id,
             worker_id,
+            session_id: None,
             cancellation_token: tokio_util::sync::CancellationToken::new(),
             store,
         }
@@ -1712,6 +1725,7 @@ impl ActivityContext {
         activity_name: String,
         activity_id: u64,
         worker_id: String,
+        session_id: Option<String>,
         cancellation_token: tokio_util::sync::CancellationToken,
         store: std::sync::Arc<dyn crate::providers::Provider>,
     ) -> Self {
@@ -1723,6 +1737,7 @@ impl ActivityContext {
             activity_name,
             activity_id,
             worker_id,
+            session_id,
             cancellation_token,
             store,
         }
@@ -1756,6 +1771,13 @@ impl ActivityContext {
     /// Returns the worker dispatcher ID processing this activity.
     pub fn worker_id(&self) -> &str {
         &self.worker_id
+    }
+
+    /// Returns the session ID if this activity was scheduled via `schedule_activity_on_session`.
+    ///
+    /// Returns `None` for regular activities scheduled via `schedule_activity`.
+    pub fn session_id(&self) -> Option<&str> {
+        self.session_id.as_deref()
     }
 
     /// Emit an INFO level trace entry associated with this activity.
@@ -2680,36 +2702,7 @@ impl OrchestrationContext {
         name: impl Into<String>,
         input: impl Into<String>,
     ) -> DurableFuture<Result<String, String>> {
-        let name: String = name.into();
-        let input: String = input.into();
-
-        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
-
-        // Emit action at schedule time
-        let token = inner.emit_action(Action::CallActivity {
-            scheduling_event_id: 0, // Will be assigned by replay engine
-            name: name.clone(),
-            input: input.clone(),
-        });
-        drop(inner);
-
-        // Create the inner polling future
-        let ctx = self.clone();
-        let inner_future = std::future::poll_fn(move |_cx| {
-            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
-            if let Some(result) = inner.get_result(token) {
-                match result {
-                    CompletionResult::ActivityOk(s) => Poll::Ready(Ok(s.clone())),
-                    CompletionResult::ActivityErr(e) => Poll::Ready(Err(e.clone())),
-                    _ => Poll::Pending, // Wrong result type, keep waiting
-                }
-            } else {
-                Poll::Pending
-            }
-        });
-
-        // Wrap in DurableFuture for cancellation support
-        DurableFuture::new(token, ScheduleKind::Activity { name }, self.clone(), inner_future)
+        self.schedule_activity_internal(name, input, None)
     }
 
     /// Typed version of schedule_activity that serializes input and deserializes output.
@@ -2728,6 +2721,87 @@ impl OrchestrationContext {
             let s = fut.await?;
             crate::_typed_codec::Json::decode::<Out>(&s)
         }
+    }
+
+    /// Schedule an activity routed to the worker owning the given session.
+    ///
+    /// If no worker owns the session, any worker can claim it on first fetch.
+    /// Once claimed, all subsequent activities with the same `session_id` route
+    /// to the claiming worker until the session unpins (idle timeout or worker death).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<String, String> {
+    /// let session_id = ctx.new_guid().await?;
+    /// let result = ctx.schedule_activity_on_session("run_turn", "input", &session_id).await?;
+    /// # Ok(result)
+    /// # }
+    /// ```
+    pub fn schedule_activity_on_session(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+        session_id: impl Into<String>,
+    ) -> DurableFuture<Result<String, String>> {
+        self.schedule_activity_internal(name, input, Some(session_id.into()))
+    }
+
+    /// Typed version of schedule_activity_on_session that serializes input and deserializes output.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the activity fails or if the output cannot be deserialized.
+    pub fn schedule_activity_on_session_typed<In: serde::Serialize, Out: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+        input: &In,
+        session_id: impl Into<String>,
+    ) -> impl Future<Output = Result<Out, String>> {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        let fut = self.schedule_activity_on_session(name, payload, session_id);
+        async move {
+            let s = fut.await?;
+            crate::_typed_codec::Json::decode::<Out>(&s)
+        }
+    }
+
+    /// Internal implementation for activity scheduling.
+    fn schedule_activity_internal(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+        session_id: Option<String>,
+    ) -> DurableFuture<Result<String, String>> {
+        let name: String = name.into();
+        let input: String = input.into();
+
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+
+        let token = inner.emit_action(Action::CallActivity {
+            scheduling_event_id: 0, // Will be assigned by replay engine
+            name: name.clone(),
+            input: input.clone(),
+            session_id,
+        });
+        drop(inner);
+
+        let ctx = self.clone();
+        let inner_future = std::future::poll_fn(move |_cx| {
+            let inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+            if let Some(result) = inner.get_result(token) {
+                match result {
+                    CompletionResult::ActivityOk(s) => Poll::Ready(Ok(s.clone())),
+                    CompletionResult::ActivityErr(e) => Poll::Ready(Err(e.clone())),
+                    _ => Poll::Pending, // Wrong result type, keep waiting
+                }
+            } else {
+                Poll::Pending
+            }
+        });
+
+        DurableFuture::new(token, ScheduleKind::Activity { name }, self.clone(), inner_future)
     }
 
     /// Schedule a timer and return a cancellation-aware future.

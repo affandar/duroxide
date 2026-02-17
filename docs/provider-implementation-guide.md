@@ -213,6 +213,21 @@ Work queues hold items waiting to be processed. Each item represents something t
 **Worker Queue items:**
 - `ActivityExecute` — Execute an activity
 
+### SessionFetchConfig
+
+When session support is enabled, `fetch_work_item` receives a `SessionFetchConfig` that controls session routing:
+
+```rust
+pub struct SessionFetchConfig {
+    /// Identity tag for session ownership (process-level).
+    pub owner_id: String,
+    /// How long to hold the session lock when claiming a new session.
+    pub lock_timeout: Duration,
+}
+```
+
+When `fetch_work_item` is called with `session: Some(config)`, the provider should return both session-bound items (owned by this worker or from unclaimed sessions) and non-session items. When called with `session: None`, only non-session items (`session_id IS NULL`) should be returned.
+
 ### Peek-Lock Semantics
 
 Both queues use **peek-lock** semantics (also called "receive and delete"):
@@ -289,9 +304,10 @@ async fn fetch_work_item(
     &self,
     lock_timeout: Duration,
     _poll_timeout: Duration,  // Ignored
+    session: Option<&SessionFetchConfig>,
 ) -> Result<Option<...>, ProviderError> {
     // Query immediately, return None if nothing available
-    self.try_fetch_and_lock().await
+    self.try_fetch_and_lock(session).await
 }
 
 // Long-polling (Redis style) - uses poll_timeout
@@ -299,10 +315,11 @@ async fn fetch_work_item(
     &self,
     lock_timeout: Duration,
     poll_timeout: Duration,  // Used
+    session: Option<&SessionFetchConfig>,
 ) -> Result<Option<...>, ProviderError> {
     // Block up to poll_timeout waiting for work
     match self.blpop("worker_queue", poll_timeout).await {
-        Some(item) => self.lock_item(item, lock_timeout).await,
+        Some(item) => self.lock_item(item, lock_timeout, session).await,
         None => Ok(None),  // Timeout expired, no work
     }
 }
@@ -332,10 +349,17 @@ Here's every method you need to implement, organized by complexity:
 
 | Method | Purpose | Complexity |
 |--------|---------|------------|
-| `fetch_work_item()` | Fetch and lock from worker queue | ⭐⭐ Medium |
+| `fetch_work_item()` | Fetch and lock from worker queue (with session routing) | ⭐⭐ Medium |
 | `ack_work_item()` | Delete from worker queue, maybe enqueue completion | ⭐⭐ Medium |
 | `abandon_work_item()` | Release lock without deleting | ⭐⭐ Medium |
 | `renew_work_item_lock()` | Extend lock for long-running activity | ⭐⭐ Medium |
+
+### Session Methods (Required)
+
+| Method | Purpose | Complexity |
+|--------|---------|------------|
+| `renew_session_lock()` | Heartbeat active sessions (batched by owner IDs) | ⭐⭐ Medium |
+| `cleanup_orphaned_sessions()` | Sweep expired sessions with no pending work | ⭐ Easy |
 
 ### Orchestration Operations (Complex)
 
@@ -397,7 +421,8 @@ impl Provider for MyProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
-    ) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+        session: Option<&SessionFetchConfig>,
+    ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         todo!("Fetch and lock from worker queue")
     }
     
@@ -473,6 +498,24 @@ impl Provider for MyProvider {
         extend_for: Duration
     ) -> Result<(), ProviderError> {
         todo!("Extend orchestration lock")
+    }
+    
+    // === Session Methods ===
+    
+    async fn renew_session_lock(
+        &self,
+        owner_ids: &[&str],
+        extend_for: Duration,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError> {
+        todo!("Heartbeat active sessions")
+    }
+    
+    async fn cleanup_orphaned_sessions(
+        &self,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError> {
+        todo!("Sweep expired sessions with no pending work")
     }
 }
 ```
@@ -616,12 +659,15 @@ async fn fetch_work_item(
     &self,
     lock_timeout: Duration,
     _poll_timeout: Duration,  // Ignored for SQLite (short-polling)
-) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+    session: Option<&SessionFetchConfig>,
+) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
     let now = current_time_ms();
     let lock_token = uuid::Uuid::new_v4().to_string();
     let locked_until = now + lock_timeout.as_millis() as i64;
     
     // Atomically find and lock one item
+    // When session is Some, include session-bound items owned by this worker;
+    // when session is None, only return non-session items.
     let result = sqlx::query!(
         "UPDATE worker_queue
          SET lock_token = ?, locked_until = ?, attempt_count = attempt_count + 1
@@ -643,10 +689,7 @@ async fn fetch_work_item(
             let item: WorkItem = serde_json::from_str(&row.work_item).unwrap();
             let attempt_count = row.attempt_count as u32;
             
-            // Check if instance is cancelled (for cooperative cancellation)
-            let state = self.get_execution_state(&row.instance_id).await;
-            
-            Ok(Some((item, lock_token, attempt_count, state)))
+            Ok(Some((item, lock_token, attempt_count)))
         }
     }
 }
@@ -659,20 +702,20 @@ async fn ack_work_item(
     let mut tx = self.pool.begin().await
         .map_err(|e| ProviderError::retryable("ack_work_item", e.to_string()))?;
     
-    // Delete the work item
+    // Delete the work item (only if lock is still valid)
     let deleted = sqlx::query!(
-        "DELETE FROM worker_queue WHERE lock_token = ?",
-        token
+        "DELETE FROM worker_queue WHERE lock_token = ? AND locked_until > ?",
+        token, current_time_ms()
     )
     .execute(&mut *tx)
     .await
     .map_err(|e| ProviderError::retryable("ack_work_item", e.to_string()))?;
     
-    // If no rows deleted, lock was stolen (activity cancelled)
+    // If no rows deleted, lock was stolen or expired
     if deleted.rows_affected() == 0 {
         return Err(ProviderError::permanent(
             "ack_work_item", 
-            "Lock token not found - activity was cancelled"
+            "Lock token not found - activity was cancelled or lock expired"
         ));
     }
     
@@ -1233,12 +1276,15 @@ async fn fetch_work_item(
     &self,
     lock_timeout: Duration,
     _poll_timeout: Duration,  // For long-polling providers
-) -> Result<Option<(WorkItem, String, u32, ExecutionState)>, ProviderError> {
+    session: Option<&SessionFetchConfig>,
+) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
     let now = current_time_ms();
     let lock_token = uuid::Uuid::new_v4().to_string();
     let locked_until = now + lock_timeout.as_millis() as i64;
     
-    // Atomically find, lock, and increment attempt_count
+    // Atomically find, lock, and increment attempt_count.
+    // When session is Some, include session-bound items owned by this worker;
+    // when session is None, only return non-session items.
     let result = sqlx::query!(
         r#"
         UPDATE worker_queue
@@ -1267,14 +1313,7 @@ async fn fetch_work_item(
                 .map_err(|e| ProviderError::permanent("fetch_work_item", e.to_string()))?;
             let attempt_count = row.attempt_count as u32;
             
-            // Check if the orchestration is cancelled/completed
-            let execution_state = if let Some(instance_id) = &row.instance_id {
-                self.get_execution_state(instance_id, row.execution_id).await
-            } else {
-                ExecutionState::Running
-            };
-            
-            Ok(Some((item, lock_token, attempt_count, execution_state)))
+            Ok(Some((item, lock_token, attempt_count)))
         }
     }
 }
@@ -1318,21 +1357,21 @@ async fn ack_work_item(
     let mut tx = self.pool.begin().await
         .map_err(|e| ProviderError::retryable("ack_work_item", e.to_string()))?;
     
-    // Delete the locked item
+    // Delete the locked item (only if lock is still valid)
     let deleted = sqlx::query!(
-        "DELETE FROM worker_queue WHERE lock_token = ?",
-        token
+        "DELETE FROM worker_queue WHERE lock_token = ? AND locked_until > ?",
+        token, current_time_ms()
     )
     .execute(&mut *tx)
     .await
     .map_err(|e| ProviderError::retryable("ack_work_item", e.to_string()))?;
     
-    // If nothing deleted, lock was stolen (activity cancelled)
+    // If nothing deleted, lock was stolen or expired
     if deleted.rows_affected() == 0 {
         tx.rollback().await.ok();
         return Err(ProviderError::permanent(
             "ack_work_item",
-            "Lock token not found - activity was cancelled via lock stealing"
+            "Lock token not found - activity was cancelled or lock expired"
         ));
     }
     
@@ -1360,7 +1399,7 @@ async fn ack_work_item(
 }
 ```
 
-**Critical:** Returns a **permanent error** when the token is not found. This signals to the worker that the activity was cancelled via lock stealing.
+**Critical:** Returns a **permanent error** when the token is not found or the lock has expired. This signals to the worker that the activity was cancelled via lock stealing, or the worker took too long without renewing the lock. The `locked_until` check is essential — without it, a worker that ran past its lock timeout could silently delete and ack an item that another worker is about to reclaim.
 
 ### renew_work_item_lock() — Complete Implementation
 
@@ -1411,6 +1450,96 @@ async fn renew_work_item_lock(
 ```
 
 **Return value:** Returns `ExecutionState` so the worker can detect if the orchestration terminated (for cooperative cancellation).
+
+### renew_session_lock() — Complete Implementation
+
+Extend session locks for active (non-idle) sessions owned by the given workers:
+
+```rust
+async fn renew_session_lock(
+    &self,
+    owner_ids: &[&str],
+    extend_for: Duration,
+    idle_timeout: Duration,
+) -> Result<usize, ProviderError> {
+    let now = current_time_ms();
+    let new_locked_until = now + extend_for.as_millis() as i64;
+    let idle_cutoff = now - idle_timeout.as_millis() as i64;
+    
+    // Only renew sessions that are still locked AND not idle
+    let result = sqlx::query!(
+        r#"
+        UPDATE sessions SET locked_until = ?1
+        WHERE worker_id IN (/* $owner_ids */)
+          AND locked_until > ?2
+          AND last_activity_at > ?3
+        "#,
+        new_locked_until, now, idle_cutoff
+    )
+    .execute(&self.pool)
+    .await
+    .map_err(|e| ProviderError::retryable("renew_session_lock", e.to_string()))?;
+    
+    Ok(result.rows_affected() as usize)
+}
+```
+
+**SQL pseudocode:**
+```sql
+UPDATE sessions SET locked_until = $now + $extend_for
+WHERE worker_id IN ($owner_ids)
+  AND locked_until > $now
+  AND last_activity_at + $idle_timeout > $now;
+```
+
+**Key semantics:**
+- Accepts a slice of owner IDs so the provider can batch into a single storage call
+- Only renews sessions whose lock has not yet expired (`locked_until > now`)
+- Skips idle sessions — those whose `last_activity_at` is older than `idle_timeout`
+- Returns the total count of sessions renewed
+
+### cleanup_orphaned_sessions() — Complete Implementation
+
+Sweep orphaned session entries that have expired locks and no pending work:
+
+```rust
+async fn cleanup_orphaned_sessions(
+    &self,
+    idle_timeout: Duration,
+) -> Result<usize, ProviderError> {
+    let now = current_time_ms();
+    
+    let result = sqlx::query!(
+        r#"
+        DELETE FROM sessions
+        WHERE locked_until < ?1
+          AND NOT EXISTS (
+              SELECT 1 FROM worker_queue
+              WHERE session_id = sessions.session_id
+          )
+        "#,
+        now
+    )
+    .execute(&self.pool)
+    .await
+    .map_err(|e| ProviderError::retryable("cleanup_orphaned_sessions", e.to_string()))?;
+    
+    Ok(result.rows_affected() as usize)
+}
+```
+
+**SQL pseudocode:**
+```sql
+DELETE FROM sessions
+WHERE locked_until < $now
+  AND NOT EXISTS (SELECT 1 FROM worker_queue WHERE session_id = sessions.session_id);
+```
+
+**Key semantics:**
+- Removes sessions whose lock has expired (`locked_until < now`)
+- Only deletes if no pending work items reference the session
+- Any worker can sweep any worker's orphans
+- Providers with built-in cleanup (TTL, eager eviction) may return `Ok(0)`
 
 ---
 
@@ -1554,7 +1683,16 @@ CREATE TABLE worker_queue (
     attempt_count INTEGER NOT NULL DEFAULT 0,
     instance_id TEXT,
     execution_id INTEGER,
-    activity_id INTEGER
+    activity_id INTEGER,
+    session_id TEXT
+);
+
+-- Session affinity tracking
+CREATE TABLE sessions (
+    session_id     TEXT PRIMARY KEY,
+    worker_id      TEXT NOT NULL,
+    locked_until   INTEGER NOT NULL,
+    last_activity_at INTEGER NOT NULL
 );
 
 -- Indexes
@@ -1563,6 +1701,7 @@ CREATE INDEX idx_orch_queue_fetch ON orchestrator_queue (visible_at, instance_id
 CREATE INDEX idx_worker_queue_fetch ON worker_queue (visible_at) 
     WHERE lock_token IS NULL;
 CREATE INDEX idx_worker_activity ON worker_queue (instance_id, execution_id, activity_id);
+CREATE INDEX idx_worker_queue_session ON worker_queue (session_id);
 CREATE INDEX idx_history_lookup ON history (instance_id, execution_id, event_id);
 ```
 
@@ -1716,9 +1855,22 @@ Before considering your provider complete:
 - [ ] `fetch_work_item()` increments attempt_count
 - [ ] `ack_work_item()` atomically deletes + enqueues completion
 - [ ] `ack_work_item()` fails when token not found (lock stolen)
+- [ ] `ack_work_item()` fails when lock has expired (locked_until < now)
 - [ ] `abandon_work_item()` makes item visible again
 - [ ] `renew_work_item_lock()` extends lock timeout
 - [ ] `renew_work_item_lock()` fails when token not found
+
+### Session Routing
+- [ ] `fetch_work_item()` with `session=Some` returns session + non-session items
+- [ ] `fetch_work_item()` with `session=None` returns only non-session items
+- [ ] Session-bound items routed to owning worker only
+- [ ] Unclaimed sessions are claimable by any worker
+- [ ] Session upsert on fetch atomically creates/updates ownership
+- [ ] `renew_session_lock()` extends lock for non-idle sessions
+- [ ] `renew_session_lock()` skips idle sessions (returns 0)
+- [ ] `cleanup_orphaned_sessions()` removes expired sessions with no work
+- [ ] `ack_work_item()` piggybacks `last_activity_at` update (with `locked_until > now` guard)
+- [ ] `renew_work_item_lock()` piggybacks `last_activity_at` update (with `locked_until > now` guard)
 
 ### Orchestrator Queue
 - [ ] `fetch_orchestration_item()` acquires instance-level lock

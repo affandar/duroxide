@@ -648,6 +648,17 @@ The validation test suite includes **112+ individual test functions** organized 
     - `test_fetch_filter_applied_before_history_deserialization` - Filter applied before history loading (corrupted + excluded = Ok(None)) *(requires `corrupt_instance_history`)*
     - `test_ack_appends_event_to_corrupted_history` - Ack with new event succeeds despite corrupted history rows (append-only contract) *(requires `corrupt_instance_history`)*
 
+16. **Session Routing Tests (33 tests)** - `duroxide::provider_validations::sessions`
+    - Basic routing: `test_non_session_items_fetchable_by_any_worker`, `test_session_item_claimable_when_no_session`, `test_session_affinity_same_worker`, `test_session_affinity_blocks_other_worker`, `test_different_sessions_different_workers`, `test_mixed_session_and_non_session_items`
+    - Lock/expiration: `test_session_claimable_after_lock_expiry`, `test_none_session_skips_session_items`, `test_some_session_returns_all_items`, `test_session_lock_expires_new_owner_gets_redelivery`, `test_session_lock_expires_same_worker_reacquires`
+    - Renewal: `test_renew_session_lock_active`, `test_renew_session_lock_skips_idle`, `test_renew_session_lock_no_sessions`
+    - Cleanup: `test_cleanup_removes_expired_no_items`, `test_cleanup_keeps_sessions_with_pending_items`, `test_cleanup_keeps_active_sessions`
+    - Piggybacking: `test_ack_updates_session_last_activity`, `test_renew_work_item_updates_session_last_activity`
+    - Edge cases: `test_session_items_processed_in_order`, `test_non_session_items_returned_with_session_config`
+    - Process-level identity: `test_shared_worker_id_any_caller_can_fetch_owned_session`
+    - Race conditions: `test_concurrent_session_claim_only_one_wins`, `test_session_takeover_after_lock_expiry`, `test_cleanup_then_new_item_recreates_session`, `test_abandoned_session_item_retryable`, `test_abandoned_session_item_ignore_attempt`
+    - Cross-concern locks: `test_renew_session_lock_after_expiry_returns_zero`, `test_original_worker_reclaims_expired_session`, `test_activity_lock_expires_session_lock_valid_same_worker_refetches`, `test_both_locks_expire_different_worker_claims`, `test_session_lock_expires_activity_lock_valid_ack_succeeds`, `test_session_lock_renewal_extends_past_original_timeout`
+
 ### Running Individual Test Functions
 
 Each validation test should be run individually. This provides:

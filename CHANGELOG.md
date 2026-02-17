@@ -5,6 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.18] - 2026-02-16
+
+**Release:** <https://crates.io/crates/duroxide/0.1.18>
+
+**Proposal:** [Activity Implicit Sessions v2](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/activity-implicit-sessions-v2.md)
+
+### Added
+
+- **Activity Session Affinity** — Route activities to the same worker for in-memory state reuse
+  - `ctx.schedule_activity_on_session(name, input, session_id)` pins activities by session ID
+  - `ctx.schedule_activity_on_session_typed()` for serde-based typed inputs/outputs
+  - `ActivityContext::session_id()` getter for process-local state lookup
+  - Two-timeout model: `session_lock_timeout` (heartbeat lease) + `session_idle_timeout` (inactivity expiry)
+  - Automatic session lifecycle: implicit creation, heartbeat renewal, idle unpin, crash recovery
+  - `SessionTracker` enforces `max_sessions_per_runtime` across all worker slots via RAII guards
+  - `worker_node_id` option for stable session identity across restarts (e.g., K8s StatefulSet pods)
+  - Session manager background task for lock renewal and orphan cleanup
+
+- **Provider API changes (required)**
+  - `fetch_work_item()` gains `session: Option<&SessionFetchConfig>` parameter for session routing
+  - New `renew_session_lock()` method — batched heartbeat for owned non-idle sessions
+  - New `cleanup_orphaned_sessions()` method — sweep expired session rows with no pending work
+  - `ack_work_item()` and `renew_work_item_lock()` piggyback `last_activity_at` updates (guarded by `locked_until`)
+
+- **New `RuntimeOptions` fields**
+  - `session_lock_timeout` (default 30s), `session_lock_renewal_buffer` (default 5s)
+  - `session_idle_timeout` (default 5min), `session_cleanup_interval` (default 5min)
+  - `max_sessions_per_runtime` (default 10), `worker_node_id` (default None)
+
+- **33 provider validation tests** for session routing, locks, races, and cross-concern interactions
+- **22 E2E tests** for single/multi-worker, fan-out, CAN, heterogeneous scenarios
+- **Schema migration** `20240107000000_add_sessions.sql` — sessions table + worker_queue.session_id
+
+### Changed
+
+- `session_id: Option<String>` added to `Action::CallActivity`, `EventKind::ActivityScheduled`, and `WorkItem::ActivityExecute` (backward compatible via `serde(default)`)
+- Existing `schedule_activity` calls are completely unaffected (`session_id = None`)
+- Documentation updated across ORCHESTRATION-GUIDE, provider-implementation-guide, provider-testing-guide, README, and migration-guide
+
 ## [0.1.17] - 2026-02-09
 
 **Release:** <https://crates.io/crates/duroxide/0.1.17>

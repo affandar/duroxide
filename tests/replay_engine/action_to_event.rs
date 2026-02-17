@@ -65,6 +65,33 @@ impl OrchestrationHandler for SubOrchNoAwaitHandler {
     }
 }
 
+/// Handler that schedules a session-bound activity and awaits it.
+pub struct SingleSessionActivityHandler {
+    activity_name: String,
+    activity_input: String,
+    session_id: String,
+}
+
+impl SingleSessionActivityHandler {
+    pub fn new(name: &str, input: &str, session_id: &str) -> Arc<Self> {
+        Arc::new(Self {
+            activity_name: name.to_string(),
+            activity_input: input.to_string(),
+            session_id: session_id.to_string(),
+        })
+    }
+}
+
+#[async_trait]
+impl OrchestrationHandler for SingleSessionActivityHandler {
+    async fn invoke(&self, ctx: OrchestrationContext, _input: String) -> Result<String, String> {
+        let result = ctx
+            .schedule_activity_on_session(&self.activity_name, &self.activity_input, &self.session_id)
+            .await?;
+        Ok(result)
+    }
+}
+
 // ============================================================================
 // Tests: Each Action Creates Corresponding Event in History Delta
 // ============================================================================
@@ -95,12 +122,80 @@ fn schedule_activity_creates_activity_scheduled_event() {
     );
 
     match &activity_events[0].kind {
-        EventKind::ActivityScheduled { name, input } => {
+        EventKind::ActivityScheduled { name, input, .. } => {
             assert_eq!(name, "MyActivity");
             assert_eq!(input, "my-input");
         }
         _ => panic!("Expected ActivityScheduled event"),
     }
+}
+
+/// Scheduling a session-bound activity records session_id in ActivityScheduled.
+#[test]
+fn schedule_activity_on_session_creates_activity_scheduled_event_with_session_id() {
+    let history = vec![started_event(1)];
+    let mut engine = create_engine(history);
+
+    let handler = SingleSessionActivityHandler::new("MyActivity", "my-input", "sess-1");
+    let result = execute(&mut engine, handler);
+
+    // Should be waiting for the activity to complete
+    assert_continue(&result);
+
+    // Verify ActivityScheduled event was created in delta with session_id
+    let delta = engine.history_delta();
+    let activity_events: Vec<_> = delta
+        .iter()
+        .filter(|e| matches!(&e.kind, EventKind::ActivityScheduled { .. }))
+        .collect();
+
+    assert_eq!(
+        activity_events.len(),
+        1,
+        "Expected exactly one ActivityScheduled event in delta"
+    );
+
+    match &activity_events[0].kind {
+        EventKind::ActivityScheduled {
+            name,
+            input,
+            session_id,
+        } => {
+            assert_eq!(name, "MyActivity");
+            assert_eq!(input, "my-input");
+            assert_eq!(session_id.as_deref(), Some("sess-1"));
+        }
+        _ => panic!("Expected ActivityScheduled event"),
+    }
+}
+
+/// On replay, a session_id mismatch between an existing ActivityScheduled event and a new action
+/// must surface as nondeterminism.
+#[test]
+fn schedule_activity_on_session_session_id_mismatch_causes_nondeterminism() {
+    let history = vec![
+        started_event(1),
+        // Existing schedule has no session_id
+        duroxide::Event::with_event_id(
+            2,
+            TEST_INSTANCE,
+            TEST_EXECUTION_ID,
+            None,
+            EventKind::ActivityScheduled {
+                name: "MyActivity".to_string(),
+                input: "my-input".to_string(),
+                session_id: None,
+            },
+        ),
+    ];
+    let mut engine = create_engine(history);
+
+    // Handler schedules the same activity but with a session_id.
+    // This must fail determinism checks.
+    let handler = SingleSessionActivityHandler::new("MyActivity", "my-input", "sess-1");
+    let result = execute(&mut engine, handler);
+
+    assert_nondeterminism(&result);
 }
 
 /// Scheduling a timer creates a TimerCreated event in history delta.

@@ -60,6 +60,7 @@ mod tests {
                 EventKind::ActivityScheduled {
                     name: "a1".to_string(),
                     input: "i1".to_string(),
+                    session_id: None,
                 },
             ),
             Event::with_event_id(
@@ -70,6 +71,7 @@ mod tests {
                 EventKind::ActivityScheduled {
                     name: "a2".to_string(),
                     input: "i2".to_string(),
+                    session_id: None,
                 },
             ),
         ];
@@ -171,6 +173,7 @@ mod tests {
                 EventKind::ActivityScheduled {
                     name: "test".to_string(),
                     input: "test".to_string(),
+                    session_id: None,
                 },
             ),
             Event::with_event_id(
@@ -319,6 +322,7 @@ mod tests {
             EventKind::ActivityScheduled {
                 name: "test-activity".to_string(),
                 input: "test-input".to_string(),
+                session_id: None,
             },
         ));
         engine.prep_completions(messages);
@@ -377,6 +381,7 @@ mod tests {
                 EventKind::ActivityScheduled {
                     name: "test-activity".to_string(),
                     input: "activity-input".to_string(),
+                    session_id: None,
                 },
             ),
             Event::with_event_id(
@@ -411,6 +416,7 @@ mod tests {
                 EventKind::ActivityScheduled {
                     name: "test".to_string(),
                     input: "input".to_string(),
+                    session_id: None,
                 },
             )],
         );
@@ -438,6 +444,7 @@ mod tests {
             EventKind::ActivityScheduled {
                 name: "test".to_string(),
                 input: "input".to_string(),
+                session_id: None,
             },
         )];
         assert!(engine.made_progress());

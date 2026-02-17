@@ -174,6 +174,7 @@ async fn test_fetch_orchestration_item_existing_instance() {
                 EventKind::ActivityScheduled {
                     name: "TestActivity".to_string(),
                     input: "activity-input".to_string(),
+                    session_id: None,
                 },
             )],
         )
@@ -284,6 +285,7 @@ async fn test_ack_orchestration_item_atomic() {
             EventKind::ActivityScheduled {
                 name: "TestActivity".to_string(),
                 input: "activity-input".to_string(),
+                session_id: None,
             },
         ),
     ];
@@ -294,6 +296,7 @@ async fn test_ack_orchestration_item_atomic() {
         id: 1,
         name: "TestActivity".to_string(),
         input: "activity-input".to_string(),
+        session_id: None,
     }];
 
     // Ack with updates
@@ -318,7 +321,7 @@ async fn test_ack_orchestration_item_atomic() {
 
     // Verify worker item was enqueued
     let (worker_item, _, _) = store
-        .fetch_work_item(Duration::from_secs(30), Duration::ZERO)
+        .fetch_work_item(Duration::from_secs(30), Duration::ZERO, None)
         .await
         .unwrap()
         .unwrap();

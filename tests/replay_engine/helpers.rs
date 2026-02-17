@@ -52,6 +52,7 @@ pub fn activity_scheduled(event_id: u64, name: &str, input: &str) -> Event {
         EventKind::ActivityScheduled {
             name: name.to_string(),
             input: input.to_string(),
+            session_id: None,
         },
     )
 }

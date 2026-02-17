@@ -413,6 +413,42 @@ let result = ctx.schedule_activity("ProcessOrder", order_json).await?;
 let result: OrderResult = ctx.schedule_activity_typed("ProcessOrder", &order_data).await?;
 ```
 
+#### Scheduling Activities with Session Affinity
+
+Route activities to the worker process that owns the given session. All activities
+with the same `session_id` are dispatched to the same worker for as long as the
+session is owned. This enables in-memory state reuse across activity invocations.
+
+```rust
+// String I/O
+fn schedule_activity_on_session(
+    &self,
+    name: impl Into<String>,
+    input: impl Into<String>,
+    session_id: impl Into<String>,
+) -> DurableFuture<Result<String, String>>
+
+// Typed I/O (with serde)
+fn schedule_activity_on_session_typed<In: Serialize, Out: DeserializeOwned>(
+    &self,
+    name: impl Into<String>,
+    input: &In,
+    session_id: impl Into<String>,
+) -> impl Future<Output = Result<Out, String>>
+
+// Usage:
+let session_id = ctx.new_guid().await?;  // Deterministic, replay-safe
+let result = ctx.schedule_activity_on_session("RunTurn", &input, &session_id).await?;
+```
+
+**Key properties of sessions:**
+- **Pure routing** — no ordering guarantees, no transactional semantics
+- **Re-claimable** — if the worker dies, another worker can claim the session after lock expiry
+- **Implicit lifecycle** — no create/close APIs; sessions are created on first use, cleaned up when idle
+- **Independent of activity locks** — an in-flight activity can still complete even if the session was reassigned (like an in-flight network packet surviving a flow table expiry)
+
+See the [Session Affinity Pattern](#session-affinity-pattern) section below for usage patterns.
+
 #### Scheduling Activities with Retry
 
 ```rust
@@ -1003,6 +1039,73 @@ match client.wait_for_orchestration("test", Duration::from_secs(10)).await {
 ---
 
 ## Common Patterns
+
+### Session Affinity Pattern
+
+Use `schedule_activity_on_session` when you need multiple activities to run on the
+same worker process — typically to share in-memory state like caches, connection pools,
+or loaded ML models.
+
+```rust
+async fn copilot_conversation(ctx: OrchestrationContext, config: String) -> Result<String, String> {
+    // Generate a deterministic session ID (replay-safe)
+    let session_id = ctx.new_guid().await?;
+    
+    // First turn: hydrates session state on the claiming worker
+    ctx.schedule_activity_on_session("HydrateSession", &config, &session_id).await?;
+    
+    // Subsequent turns: routed to the same worker, reusing in-memory state
+    loop {
+        let user_input = ctx.schedule_wait("user_message").await;
+        
+        let response = ctx.schedule_activity_on_session(
+            "RunTurn", &user_input, &session_id
+        ).await?;
+        
+        if response == "done" {
+            break;
+        }
+    }
+    
+    Ok("conversation complete".to_string())
+}
+```
+
+**Worker side — managing session state:**
+```rust
+// Use an LRU cache keyed by session_id
+static SESSION_CACHE: LazyLock<Mutex<LruCache<String, SessionState>>> = ...;
+
+.register("RunTurn", |ctx: ActivityContext, input: String| async move {
+    let session_id = ctx.session_id().expect("must be session-bound");
+    let mut cache = SESSION_CACHE.lock().unwrap();
+    let state = cache.get_mut(session_id)
+        .ok_or("unknown_session — needs re-hydration")?;
+    
+    let result = state.process(&input).await;
+    Ok(result)
+})
+```
+
+**Session migration handling:**
+When a session migrates (worker death, idle timeout), the new worker won't have the
+in-memory state. Handle this reactively:
+
+```rust
+match ctx.schedule_activity_on_session("RunTurn", &input, &session_id).await {
+    Ok(result) => { /* success */ }
+    Err(e) if e.contains("unknown_session") => {
+        // Re-hydrate on the new worker
+        ctx.schedule_activity_on_session("HydrateSession", &config, &session_id).await?;
+        ctx.schedule_activity_on_session("RunTurn", &input, &session_id).await?;
+    }
+    Err(e) => return Err(e),
+}
+```
+
+**Rolling upgrade caveat:** Session-bound activities are pinned to the owning worker
+until the session unpins. During rolling upgrades, ensure all workers have the session
+activity handlers registered before orchestrations schedule session activities.
 
 ### 1. Function Chaining (Sequential Steps)
 

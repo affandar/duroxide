@@ -40,3 +40,9 @@ These tests ensure that patterns discovered and validated in production environm
 - Complex activity workflows
 - Single-threaded execution model compatibility
 
+### Session Affinity (Durable-Copilot-SDK Pattern)
+Tests modeling the durable-copilot-sdk architecture: stateful conversation workloads where
+in-memory `CopilotSession` objects must persist across sequential activity invocations on the
+same worker. The test faithfully ports the SDK's `SessionManager`, `durableTurnOrchestration`,
+and `runAgentTurn` activity to exercise the full session lifecycle:
+- **Scaled-out multi-conversation**: 2 worker runtimes, 4 concurrent conversations (2 simple + 2 with wait/timer/CAN), per-worker `SessionManager` isolation, session affinity verification, zero cache-miss re-creation

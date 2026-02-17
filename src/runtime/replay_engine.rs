@@ -620,7 +620,7 @@ impl ReplayEngine {
                 }
 
                 // Schedule events
-                EventKind::ActivityScheduled { name, input: inp } => {
+                EventKind::ActivityScheduled { name, input: inp, .. } => {
                     if let Err(result) = self.match_and_bind_schedule(
                         &ctx,
                         &mut emitted_actions,
@@ -1391,9 +1391,15 @@ fn extract_panic_message(panic_payload: Box<dyn std::any::Any + Send>) -> String
 /// Convert an Action to an Event for history persistence
 fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id: u64) -> Option<Event> {
     let kind = match action {
-        Action::CallActivity { name, input, .. } => EventKind::ActivityScheduled {
+        Action::CallActivity {
+            name,
+            input,
+            session_id,
+            ..
+        } => EventKind::ActivityScheduled {
             name: name.clone(),
             input: input.clone(),
+            session_id: session_id.clone(),
         },
         Action::CreateTimer { fire_at_ms, .. } => EventKind::TimerCreated {
             fire_at_ms: *fire_at_ms,
@@ -1435,10 +1441,16 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
 /// (unless an explicit instance ID was provided, indicated by not starting with SUB_ORCH_PENDING_PREFIX).
 fn update_action_event_id(action: Action, event_id: u64) -> Action {
     match action {
-        Action::CallActivity { name, input, .. } => Action::CallActivity {
+        Action::CallActivity {
+            name,
+            input,
+            session_id,
+            ..
+        } => Action::CallActivity {
             scheduling_event_id: event_id,
             name,
             input,
+            session_id,
         },
         Action::CreateTimer { fire_at_ms, .. } => Action::CreateTimer {
             scheduling_event_id: event_id,
@@ -1508,9 +1520,19 @@ fn poll_once<F: Future>(fut: Pin<&mut F>) -> Poll<F::Output> {
 /// Check if an action matches an event kind
 fn action_matches_event_kind(action: &Action, event_kind: &EventKind) -> bool {
     match (action, event_kind) {
-        (Action::CallActivity { name, input, .. }, EventKind::ActivityScheduled { name: en, input: ei }) => {
-            name == en && input == ei
-        }
+        (
+            Action::CallActivity {
+                name,
+                input,
+                session_id,
+                ..
+            },
+            EventKind::ActivityScheduled {
+                name: en,
+                input: ei,
+                session_id: es,
+            },
+        ) => name == en && input == ei && session_id == es,
 
         (Action::CreateTimer { fire_at_ms, .. }, EventKind::TimerCreated { fire_at_ms: ef }) => {
             // Allow some tolerance for timer fire_at_ms since it's computed at different times

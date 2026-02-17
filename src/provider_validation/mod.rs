@@ -33,6 +33,8 @@ pub mod poison_message;
 pub mod prune;
 #[cfg(feature = "provider-test")]
 pub mod queue_semantics;
+#[cfg(feature = "provider-test")]
+pub mod sessions;
 
 #[cfg(feature = "provider-test")]
 use crate::INITIAL_EXECUTION_ID;

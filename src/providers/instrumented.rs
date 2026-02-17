@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use super::{
     DispatcherCapabilityFilter, ExecutionMetadata, OrchestrationItem, Provider, ProviderAdmin, ProviderError,
-    ScheduledActivityIdentifier, WorkItem,
+    ScheduledActivityIdentifier, SessionFetchConfig, WorkItem,
 };
 use crate::Event;
 use crate::runtime::observability::MetricsProvider;
@@ -191,9 +191,10 @@ impl Provider for InstrumentedProvider {
         &self,
         lock_timeout: Duration,
         poll_timeout: Duration,
+        session: Option<&SessionFetchConfig>,
     ) -> Result<Option<(WorkItem, String, u32)>, ProviderError> {
         let start = std::time::Instant::now();
-        let result = self.inner.fetch_work_item(lock_timeout, poll_timeout).await;
+        let result = self.inner.fetch_work_item(lock_timeout, poll_timeout, session).await;
         let duration = start.elapsed();
 
         self.record_operation(
@@ -227,6 +228,39 @@ impl Provider for InstrumentedProvider {
 
     async fn renew_work_item_lock(&self, token: &str, extend_for: Duration) -> Result<(), ProviderError> {
         self.inner.renew_work_item_lock(token, extend_for).await
+    }
+
+    async fn renew_session_lock(
+        &self,
+        owner_ids: &[&str],
+        extend_for: Duration,
+        idle_timeout: Duration,
+    ) -> Result<usize, ProviderError> {
+        let start = std::time::Instant::now();
+        let result = self.inner.renew_session_lock(owner_ids, extend_for, idle_timeout).await;
+        self.record_operation(
+            "renew_session_lock",
+            start.elapsed(),
+            if result.is_ok() { "success" } else { "error" },
+        );
+        if let Err(ref e) = result {
+            self.record_error("renew_session_lock", e);
+        }
+        result
+    }
+
+    async fn cleanup_orphaned_sessions(&self, idle_timeout: Duration) -> Result<usize, ProviderError> {
+        let start = std::time::Instant::now();
+        let result = self.inner.cleanup_orphaned_sessions(idle_timeout).await;
+        self.record_operation(
+            "cleanup_orphaned_sessions",
+            start.elapsed(),
+            if result.is_ok() { "success" } else { "error" },
+        );
+        if let Err(ref e) = result {
+            self.record_error("cleanup_orphaned_sessions", e);
+        }
+        result
     }
 
     async fn abandon_work_item(

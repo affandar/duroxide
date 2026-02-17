@@ -39,6 +39,13 @@ let rt = Runtime::start_with_options(store, activities, orchestrations, options)
 2025-11-01T17:22:05.010Z INFO duroxide::runtime Orchestration completed instance_id=order-123 execution_id=1 worker_id=orch-0-cd54 history_events=9
 ```
 
+Session-related log events include:
+```
+... Session claimed/refreshed on fetch session_id=sess-abc owner_id=my-pod
+... Session locks renewed sessions_renewed=3
+... Session capacity exceeded after fetch (race), abandoning work item session_id=sess-xyz
+```
+
 Format: `timestamp level module message field1=value1 field2=value2 ...`
 
 All correlation fields are included directly on each log line (flat structure, no span nesting).
