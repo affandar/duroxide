@@ -872,3 +872,146 @@ async fn enqueue_event_typed_round_trip() {
 
     rt.shutdown(None).await;
 }
+
+/// Multiple independent queues are isolated: messages on queue "A" never leak
+/// into queue "B", and FIFO ordering is maintained per-queue independently.
+///
+/// Orchestration subscribes to three queues in a specific order (orders, payments, notifications).
+/// Messages are enqueued across queues in interleaved order. The test asserts:
+///   1. Each dequeue_event only receives messages from its own queue name
+///   2. FIFO ordering is preserved within each queue independently
+///   3. Queues can be dequeued in any order relative to enqueue timing
+#[tokio::test]
+async fn multi_queue_isolation_and_independent_fifo() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _: String| async move {
+        // Dequeue from three independent queues
+        let order1 = ctx.dequeue_event("orders").await;
+        let order2 = ctx.dequeue_event("orders").await;
+        let pay1 = ctx.dequeue_event("payments").await;
+        let pay2 = ctx.dequeue_event("payments").await;
+        let notif1 = ctx.dequeue_event("notifications").await;
+
+        Ok(format!("{order1},{order2}|{pay1},{pay2}|{notif1}"))
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("MultiQueue", orch)
+        .build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
+    let client = Client::new(store.clone());
+
+    // Enqueue messages across queues in interleaved order BEFORE starting orchestration.
+    // This tests that buffered messages are matched to the correct queue by name,
+    // not by arrival order across all queues.
+    client.enqueue_event("inst-multi-q", "payments", "pay_first").await.unwrap();
+    client.enqueue_event("inst-multi-q", "orders", "order_first").await.unwrap();
+    client.enqueue_event("inst-multi-q", "notifications", "alert_1").await.unwrap();
+    client.enqueue_event("inst-multi-q", "orders", "order_second").await.unwrap();
+    client.enqueue_event("inst-multi-q", "payments", "pay_second").await.unwrap();
+
+    // Start orchestration — all five messages are already buffered
+    client
+        .start_orchestration("inst-multi-q", "MultiQueue", "")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("inst-multi-q", Duration::from_secs(5))
+        .await
+        .unwrap();
+    match status {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
+            // orders: order_first then order_second (FIFO within "orders")
+            // payments: pay_first then pay_second (FIFO within "payments")
+            // notifications: alert_1
+            assert_eq!(output, "order_first,order_second|pay_first,pay_second|alert_1");
+        }
+        other => panic!("Expected Completed, got: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Multiple queues with staggered delivery: some messages arrive before the
+/// orchestration subscribes, others arrive after. Verifies that per-queue FIFO
+/// is maintained regardless of timing relative to subscription creation.
+#[tokio::test]
+async fn multi_queue_staggered_delivery() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _: String| async move {
+        // First: dequeue from "commands" (will be pre-buffered)
+        let cmd1 = ctx.dequeue_event("commands").await;
+
+        // Force a new turn with an activity, then dequeue from "status" (will arrive later)
+        let _ = ctx.schedule_activity("Noop", "x").await?;
+        let stat1 = ctx.dequeue_event("status").await;
+
+        // Dequeue another from each queue
+        let cmd2 = ctx.dequeue_event("commands").await;
+        let stat2 = ctx.dequeue_event("status").await;
+
+        Ok(format!("cmd:{cmd1},{cmd2}|stat:{stat1},{stat2}"))
+    };
+
+    let noop_activity = |_ctx: ActivityContext, _input: String| async move { Ok("ok".to_string()) };
+
+    let orchestration_registry = OrchestrationRegistry::builder()
+        .register("StaggeredQ", orch)
+        .build();
+    let activity_registry = ActivityRegistry::builder()
+        .register("Noop", noop_activity)
+        .build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
+    let client = Client::new(store.clone());
+
+    // Pre-buffer: two commands and one status
+    client.enqueue_event("inst-staggered-q", "commands", "c1").await.unwrap();
+    client.enqueue_event("inst-staggered-q", "commands", "c2").await.unwrap();
+    client.enqueue_event("inst-staggered-q", "status", "s1").await.unwrap();
+
+    client
+        .start_orchestration("inst-staggered-q", "StaggeredQ", "")
+        .await
+        .unwrap();
+
+    // Wait for the orchestration to progress past the first dequeue + activity,
+    // then send the second status message
+    assert!(
+        common::wait_for_subscription(store.clone(), "inst-staggered-q", "status", 3000).await,
+        "Status subscription was never registered"
+    );
+    // Small delay to let the second "status" subscription register after replay
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    client.enqueue_event("inst-staggered-q", "status", "s2").await.unwrap();
+
+    let status = client
+        .wait_for_orchestration("inst-staggered-q", Duration::from_secs(5))
+        .await
+        .unwrap();
+    match status {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
+            assert_eq!(output, "cmd:c1,c2|stat:s1,s2");
+        }
+        other => panic!("Expected Completed, got: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+}
