@@ -409,9 +409,13 @@ impl Runtime {
         }
 
         // Process the execution (unified path)
-        let (worker_items, orchestrator_items, select_cancelled_activities, execution_id_for_ack) = if workitem_reader
-            .has_orchestration_name()
-        {
+        let (
+            mut worker_items,
+            mut orchestrator_items,
+            select_cancelled_activities,
+            execution_id_for_ack,
+            custom_status,
+        ) = if workitem_reader.has_orchestration_name() {
             // Resolve handler and execute orchestration
             let result = self
                 .resolve_and_execute_orchestration_handler(
@@ -424,7 +428,7 @@ impl Runtime {
                 .await;
 
             match result {
-                Ok((wi, oi, cancels)) => {
+                Ok((wi, oi, cancels, cs)) => {
                     // Handler resolved successfully - now record metrics
                     tracing::debug!(
                         target: "duroxide::runtime",
@@ -450,7 +454,7 @@ impl Runtime {
                         self.increment_active_orchestrations();
                     }
 
-                    (wi, oi, cancels, execution_id_to_use)
+                    (wi, oi, cancels, execution_id_to_use, cs)
                 }
                 Err(OrchestrationProcessingError::UnregisteredOrchestration) => {
                     // Orchestration not registered - abandon with exponential backoff
@@ -481,7 +485,7 @@ impl Runtime {
             }
         } else {
             // Empty effective batch
-            (vec![], vec![], vec![], execution_id_to_use)
+            (vec![], vec![], vec![], execution_id_to_use, None)
         };
 
         // Snapshot current history delta (used for metadata + logging below).
@@ -489,8 +493,55 @@ impl Runtime {
         let history_delta_snapshot = history_mgr.delta().to_vec();
 
         // Compute execution metadata from history_delta (runtime responsibility)
-        let metadata =
+        let mut metadata =
             Runtime::compute_execution_metadata(&history_delta_snapshot, &orchestrator_items, item.execution_id);
+
+        // Plumb custom_status from OrchestrationContext into metadata
+        metadata.custom_status = custom_status;
+
+        // Enforce custom status size limit.
+        // If the user set a status that exceeds the limit, fail the orchestration
+        // as an application error before committing the ack.
+        if let Some(crate::providers::CustomStatusUpdate::Set(ref s)) = metadata.custom_status {
+            if s.len() > crate::runtime::limits::MAX_CUSTOM_STATUS_BYTES {
+                tracing::error!(
+                    target: "duroxide::runtime",
+                    instance_id = %instance,
+                    execution_id = %execution_id_for_ack,
+                    custom_status_bytes = s.len(),
+                    max_bytes = crate::runtime::limits::MAX_CUSTOM_STATUS_BYTES,
+                    "Custom status exceeds size limit, failing orchestration"
+                );
+
+                let error = crate::ErrorDetails::Application {
+                    kind: crate::AppErrorKind::OrchestrationFailed,
+                    message: format!(
+                        "Custom status size ({} bytes) exceeds limit ({} bytes)",
+                        s.len(),
+                        crate::runtime::limits::MAX_CUSTOM_STATUS_BYTES,
+                    ),
+                    retryable: false,
+                };
+
+                let failed_event = Event::with_event_id(
+                    history_mgr.next_event_id(),
+                    instance,
+                    execution_id_for_ack,
+                    None,
+                    EventKind::OrchestrationFailed { details: error.clone() },
+                );
+                history_mgr.append(failed_event);
+
+                // Override metadata to mark as failed; drop the oversized custom_status
+                metadata.status = Some("Failed".to_string());
+                metadata.output = Some(error.display_message());
+                metadata.custom_status = None;
+
+                // Drop any worker/orchestrator items — the orchestration is dead
+                worker_items.clear();
+                orchestrator_items.clear();
+            }
+        }
 
         // Calculate metrics
         let duration_seconds = start_time.elapsed().as_secs_f64();
@@ -791,7 +842,15 @@ impl Runtime {
         workitem_reader: &WorkItemReader,
         execution_id: u64,
         worker_id: &str,
-    ) -> Result<(Vec<WorkItem>, Vec<WorkItem>, Vec<ScheduledActivityIdentifier>), OrchestrationProcessingError> {
+    ) -> Result<
+        (
+            Vec<WorkItem>,
+            Vec<WorkItem>,
+            Vec<ScheduledActivityIdentifier>,
+            Option<crate::providers::CustomStatusUpdate>,
+        ),
+        OrchestrationProcessingError,
+    > {
         let mut worker_items = Vec::new();
         let mut orchestrator_items = Vec::new();
         let mut cancelled_activities = Vec::new();
@@ -824,6 +883,14 @@ impl Runtime {
 
         // Create started event if this is a new instance
         if history_mgr.is_empty() {
+            // Extract carry-forward events from ContinueAsNew work item for audit trail
+            let carry_forward_events = match &workitem_reader.start_item {
+                Some(WorkItem::ContinueAsNew {
+                    carry_forward_events, ..
+                }) if !carry_forward_events.is_empty() => Some(carry_forward_events.clone()),
+                _ => None,
+            };
+
             history_mgr.append(Event::with_event_id(
                 1, // First event always has event_id=1
                 instance,
@@ -835,30 +902,37 @@ impl Runtime {
                     input: workitem_reader.input.clone(),
                     parent_instance: workitem_reader.parent_instance.clone(),
                     parent_id: workitem_reader.parent_id,
+                    carry_forward_events,
                 },
             ));
         }
 
         // Run the atomic execution to get all changes, passing the resolved handler and version
-        let (_exec_history_delta, exec_worker_items, exec_orchestrator_items, exec_cancelled_activities, _result) =
-            Arc::clone(self)
-                .run_single_execution_atomic(
-                    instance,
-                    history_mgr,
-                    workitem_reader,
-                    execution_id,
-                    worker_id,
-                    handler,
-                    resolved_version.to_string(),
-                )
-                .await;
+        let (
+            _exec_history_delta,
+            exec_worker_items,
+            exec_orchestrator_items,
+            exec_cancelled_activities,
+            _result,
+            custom_status,
+        ) = Arc::clone(self)
+            .run_single_execution_atomic(
+                instance,
+                history_mgr,
+                workitem_reader,
+                execution_id,
+                worker_id,
+                handler,
+                resolved_version.to_string(),
+            )
+            .await;
 
         // Combine all changes (history already in history_mgr via mutation)
         worker_items.extend(exec_worker_items);
         orchestrator_items.extend(exec_orchestrator_items);
         cancelled_activities.extend(exec_cancelled_activities);
 
-        Ok((worker_items, orchestrator_items, cancelled_activities))
+        Ok((worker_items, orchestrator_items, cancelled_activities, custom_status))
     }
 
     /// Acknowledge an orchestration item with changes, using smart retry logic based on ProviderError
@@ -1004,6 +1078,7 @@ impl Runtime {
                 orchestration_version: Some(item.version.clone()),
                 parent_instance_id: None,
                 pinned_duroxide_version: None,
+                custom_status: None,
             };
 
             let _ = self
@@ -1031,7 +1106,7 @@ impl Runtime {
         // If history is empty, we need to create an OrchestrationStarted event first
         if history_mgr.is_empty() {
             // Try to extract orchestration name from work items
-            let (orchestration_name, input, parent_instance, parent_id) = item
+            let (orchestration_name, input, parent_instance, parent_id, carry_forward_events) = item
                 .messages
                 .iter()
                 .find_map(|msg| match msg {
@@ -1046,13 +1121,23 @@ impl Runtime {
                         input.clone(),
                         parent_instance.clone(),
                         *parent_id,
+                        None,
                     )),
                     WorkItem::ContinueAsNew {
-                        orchestration, input, ..
-                    } => Some((orchestration.clone(), input.clone(), None, None)),
+                        orchestration,
+                        input,
+                        carry_forward_events,
+                        ..
+                    } => Some((
+                        orchestration.clone(),
+                        input.clone(),
+                        None,
+                        None,
+                        Some(carry_forward_events.clone()),
+                    )),
                     _ => None,
                 })
-                .unwrap_or_else(|| (item.orchestration_name.clone(), String::new(), None, None));
+                .unwrap_or_else(|| (item.orchestration_name.clone(), String::new(), None, None, None));
 
             // Save parent link for notification
             if let (Some(pi), Some(pid)) = (&parent_instance, parent_id) {
@@ -1070,6 +1155,7 @@ impl Runtime {
                     input,
                     parent_instance,
                     parent_id,
+                    carry_forward_events,
                 },
             ));
         } else {
@@ -1096,6 +1182,7 @@ impl Runtime {
             orchestration_version: Some(item.version.clone()),
             parent_instance_id: parent_link.as_ref().map(|(pi, _)| pi.clone()),
             pinned_duroxide_version: None, // Poison path — version already set at creation
+            custom_status: None,
         };
 
         // If this is a sub-orchestration, notify parent of failure

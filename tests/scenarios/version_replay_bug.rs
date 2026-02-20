@@ -114,7 +114,7 @@ async fn e2e_replay_completion_only_must_use_version_from_history() {
     // If the bug exists, the orchestration will fail with nondeterminism error
     // because replay (after activity completes) uses Latest (v1.0.3) instead of v1.0.2
     match &status {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             // Should complete with "pruned:" (v1.0.2's activity)
             assert!(
                 output.contains("pruned:"),
@@ -129,7 +129,7 @@ async fn e2e_replay_completion_only_must_use_version_from_history() {
                 "v1.0.3 should NOT be called during replay of v1.0.2 instance"
             );
         }
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             // If we see nondeterminism error, that confirms the bug
             let details_str = format!("{details:?}");
             if details_str.contains("nondeterminism") || details_str.contains("schedule order mismatch") {
@@ -248,7 +248,7 @@ async fn e2e_replay_completion_only_after_can_must_use_version_from_history() {
         .expect("wait should succeed");
 
     match &status {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             // Should complete with "pruned:" (v1.0.2's activity from execution 2)
             assert!(
                 output.contains("pruned:"),
@@ -276,7 +276,7 @@ async fn e2e_replay_completion_only_after_can_must_use_version_from_history() {
                  This would indicate the bug: version not extracted from execution 2's history."
             );
         }
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             let details_str = format!("{details:?}");
             if details_str.contains("nondeterminism") || details_str.contains("schedule order mismatch") {
                 panic!(
@@ -326,6 +326,7 @@ fn unit_workitem_reader_completion_only_must_preserve_version() {
             input: "original-input".to_string(),
             parent_instance: Some("parent-inst".to_string()),
             parent_id: Some(42),
+            carry_forward_events: None,
         },
     )];
 
@@ -391,6 +392,7 @@ fn unit_workitem_reader_nth_execution_must_preserve_version() {
                 input: "can-input".to_string(),
                 parent_instance: Some("parent-for-v2".to_string()),
                 parent_id: Some(99),
+                carry_forward_events: None,
             },
         ),
         Event::with_event_id(
@@ -474,6 +476,7 @@ fn unit_workitem_reader_completion_only_tuple_field_analysis() {
             input: "original-input".to_string(),
             parent_instance: Some("parent-inst".to_string()),
             parent_id: Some(42),
+            carry_forward_events: None,
         },
     )];
 
@@ -543,6 +546,7 @@ fn unit_input_comes_from_extract_context_not_workitem_reader() {
                 input: "ORIGINAL-INPUT-FROM-FIRST-TURN".to_string(), // The actual input
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ),
         Event::with_event_id(
@@ -605,6 +609,7 @@ fn unit_nth_execution_history_starts_with_orchestration_started() {
                 input: "can-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ),
         // Second event: Activity scheduled
@@ -740,7 +745,7 @@ async fn e2e_can_input_preserved_during_completion_only_replay() {
         .expect("wait should succeed");
 
     match &status {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             // v2 should have received the CAN input, not the original
             assert!(
                 output.contains("INPUT-FOR-V2-FROM-CAN"),
@@ -768,7 +773,7 @@ async fn e2e_can_input_preserved_during_completion_only_replay() {
                 "v2 should NEVER receive the original input, got: {v2_recorded:?}"
             );
         }
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {details:?}");
         }
         other => panic!("Unexpected status: {other:?}"),
@@ -812,6 +817,7 @@ fn unit_completion_only_replay_uses_nth_execution_input() {
                 input: "CAN-INPUT-FOR-EXECUTION-2".to_string(), // Different from execution 1!
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ),
         Event::with_event_id(

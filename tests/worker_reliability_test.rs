@@ -123,11 +123,11 @@ async fn activity_reliability_after_crash_before_completion_enqueue() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "Activity result: Processed: test-data");
             println!("✅ Orchestration completed successfully after restart");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed after restart: {}", details.display_message());
         }
         status => {
@@ -292,11 +292,11 @@ async fn multiple_activities_reliability_after_crash() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             println!("✅ All activities completed after recovery");
             assert!(output.contains("All activities completed"));
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         status => {
@@ -393,7 +393,7 @@ async fn worker_abandon_on_ack_failure_enables_retry() {
         .unwrap();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "done");
         }
         other => panic!("Unexpected status: {other:?}"),

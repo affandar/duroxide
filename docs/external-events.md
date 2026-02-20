@@ -17,5 +17,38 @@ Flow
 
 Recommendations
 - Subscribe early in your orchestrator before signaling external parties.
-- If you need buffering before subscription, build a small durable mailbox (e.g., a table/queue) and have the orchestrator drain it after subscribing.
+- If you need buffering before subscription, use **event queues** (see below) instead of ephemeral events.
 - Include correlation data in `data` and implement idempotency in your orchestrator for resilience.
+
+## Event Queues (Persistent/FIFO)
+
+For use cases where messages arrive before the orchestration subscribes — or where FIFO ordering matters — use the queue-based API:
+
+**Orchestration side:**
+```rust
+// Dequeue next message (blocks until available)
+let msg = ctx.dequeue_event("inbox").await;
+
+// Typed variant
+let msg: ChatMessage = ctx.dequeue_event_typed("inbox").await;
+```
+
+**Client side:**
+```rust
+// Send a message into the queue
+client.enqueue_event("instance-1", "inbox", payload).await?;
+
+// Typed variant
+client.enqueue_event_typed("instance-1", "inbox", &data).await?;
+```
+
+Key differences from ephemeral events:
+
+| Feature | Ephemeral (`schedule_wait`/`raise_event`) | Queue (`dequeue_event`/`enqueue_event`) |
+|---------|------------------------------------------|----------------------------------------|
+| Matching | Positional (Nth wait ↔ Nth raise) | FIFO queue |
+| Early messages | Dropped if no subscription | Buffered until dequeued |
+| Survives CAN | No (must re-subscribe) | Yes (queue persists) |
+| Use case | One-shot signals, approvals | Chat, command streams, iterative loops |
+
+Deprecated aliases: `raise_event_persistent()` → `enqueue_event()`, `schedule_wait_persistent()` → `dequeue_event()`.

@@ -219,7 +219,131 @@ pub async fn test_prune_bulk<F: ProviderFactory>(factory: &F) {
     tracing::info!("✓ Test passed: prune bulk operations");
 }
 
+/// Test: bulk prune includes Running instances
+///
+/// Validates that `prune_executions_bulk` correctly handles instances that are
+/// still Running — e.g., long-running orchestrations using ContinueAsNew that
+/// accumulate old executions. The current (Running) execution must be preserved
+/// while historical executions are pruned.
+///
+/// This catches providers that filter with `WHERE status IN ('Completed', 'Failed', ...)`
+/// which would exclude Running instances from pruning entirely.
+pub async fn test_prune_bulk_includes_running_instances<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing prune: bulk includes running instances");
+    let provider = factory.create_provider().await;
+    let mgmt = provider
+        .as_management_capability()
+        .expect("Provider should implement ProviderAdmin");
+
+    // Create a Running instance with 3 executions (simulating ContinueAsNew chain
+    // where the latest execution is still running)
+    let instance_id = "prune-running-inst";
+    create_running_multi_execution_instance(&*provider, instance_id, 3).await;
+
+    // Verify setup: 3 executions, status is Running
+    let executions = mgmt.list_executions(instance_id).await.unwrap();
+    assert_eq!(executions.len(), 3, "Should have 3 executions");
+    let info = mgmt.get_instance_info(instance_id).await.unwrap();
+    assert_eq!(info.status, "Running", "Instance should still be Running");
+    assert_eq!(info.current_execution_id, 3, "Current execution should be 3");
+
+    // Bulk prune with keep_last=1 — should delete executions 1 and 2, keep 3
+    let result = mgmt
+        .prune_executions_bulk(
+            InstanceFilter {
+                instance_ids: Some(vec![instance_id.into()]),
+                ..Default::default()
+            },
+            PruneOptions {
+                keep_last: Some(1),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(result.instances_processed, 1, "Should process the running instance");
+    assert_eq!(result.executions_deleted, 2, "Should delete 2 historical executions");
+
+    // Verify only current execution remains
+    let remaining = mgmt.list_executions(instance_id).await.unwrap();
+    assert_eq!(remaining.len(), 1, "Should have 1 execution remaining");
+    assert_eq!(remaining[0], 3, "Remaining execution should be the current one (3)");
+
+    // Verify instance is still Running
+    let info = mgmt.get_instance_info(instance_id).await.unwrap();
+    assert_eq!(info.status, "Running", "Instance should still be Running after prune");
+
+    tracing::info!("✓ Test passed: prune bulk includes running instances");
+}
+
 // ===== Helper Functions =====
+
+/// Helper: create a Running instance with multiple executions (simulating ContinueAsNew
+/// chain where the latest execution is still active).
+///
+/// Execution 1..(n-1) are marked ContinuedAsNew, execution n is marked Running.
+async fn create_running_multi_execution_instance(
+    provider: &dyn crate::providers::Provider,
+    instance_id: &str,
+    num_executions: u64,
+) {
+    for exec_id in 1..=num_executions {
+        let is_last = exec_id == num_executions;
+        let status = if is_last { "Running" } else { "ContinuedAsNew" };
+
+        let work_item = if exec_id == 1 {
+            start_item(instance_id)
+        } else {
+            WorkItem::ContinueAsNew {
+                instance: instance_id.to_string(),
+                orchestration: "LongRunning".to_string(),
+                input: "{}".to_string(),
+                version: Some("1.0.0".to_string()),
+                carry_forward_events: vec![],
+            }
+        };
+
+        provider.enqueue_for_orchestrator(work_item, None).await.unwrap();
+
+        let (_item, lock_token, _) = provider
+            .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
+            .await
+            .unwrap()
+            .unwrap();
+
+        provider
+            .ack_orchestration_item(
+                &lock_token,
+                exec_id,
+                vec![Event::with_event_id(
+                    1,
+                    instance_id,
+                    exec_id,
+                    None,
+                    EventKind::OrchestrationStarted {
+                        name: "LongRunning".to_string(),
+                        version: "1.0.0".to_string(),
+                        input: "{}".to_string(),
+                        parent_instance: None,
+                        parent_id: None,
+                        carry_forward_events: None,
+                    },
+                )],
+                vec![],
+                vec![],
+                ExecutionMetadata {
+                    status: Some(status.to_string()),
+                    orchestration_name: Some("LongRunning".to_string()),
+                    orchestration_version: Some("1.0.0".to_string()),
+                    ..Default::default()
+                },
+                vec![],
+            )
+            .await
+            .unwrap();
+    }
+}
 
 /// Helper: create an instance with multiple executions (simulating ContinueAsNew)
 async fn create_multi_execution_instance(
@@ -239,6 +363,7 @@ async fn create_multi_execution_instance(
                 orchestration: "TestOrch".to_string(),
                 input: "{}".to_string(),
                 version: Some("1.0.0".to_string()),
+                carry_forward_events: vec![],
             }
         };
 
@@ -265,6 +390,7 @@ async fn create_multi_execution_instance(
                         input: "{}".to_string(),
                         parent_instance: None,
                         parent_id: None,
+                        carry_forward_events: None,
                     },
                 )],
                 vec![],

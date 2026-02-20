@@ -438,7 +438,7 @@ pub use providers::{
 };
 
 // Re-export capability filtering types
-pub use providers::{DispatcherCapabilityFilter, SemverRange, current_build_version};
+pub use providers::{CustomStatusUpdate, DispatcherCapabilityFilter, SemverRange, current_build_version};
 
 // Re-export deletion/pruning types for Client API users
 pub use providers::{DeleteInstanceResult, InstanceFilter, InstanceTree, PruneOptions, PruneResult};
@@ -477,6 +477,11 @@ pub enum ScheduleKind {
     Timer,
     /// Waiting for an external event
     ExternalWait {
+        /// Event name for debugging/logging
+        event_name: String,
+    },
+    /// Waiting for a persistent external event (mailbox semantics)
+    QueueDequeue {
         /// Event name for debugging/logging
         event_name: String,
     },
@@ -974,6 +979,11 @@ pub enum EventKind {
         input: String,
         parent_instance: Option<String>,
         parent_id: Option<u64>,
+        /// Persistent events carried forward from the previous execution during continue-as-new.
+        /// Present only on CAN-initiated executions for audit trail. Each tuple is (event_name, data).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        carry_forward_events: Option<Vec<(String, String)>>,
     },
 
     /// Orchestration completed with a final result.
@@ -1059,6 +1069,31 @@ pub enum EventKind {
     /// Cancellation has been requested for the orchestration (terminal will follow deterministically).
     #[serde(rename = "OrchestrationCancelRequested")]
     OrchestrationCancelRequested { reason: String },
+
+    /// An external event subscription was cancelled (e.g., lost a select2 race).
+    /// Correlates to the ExternalSubscribed event via Event.source_event_id.
+    /// This breadcrumb ensures deterministic replay — cancelled subscriptions
+    /// are skipped during index-based matching.
+    #[serde(rename = "ExternalSubscribedCancelled")]
+    ExternalSubscribedCancelled { reason: String },
+
+    /// Persistent subscription to an external event by name was recorded.
+    /// Unlike positional ExternalSubscribed, persistent subscriptions use
+    /// mailbox semantics: FIFO matching, no positional pairing.
+    #[serde(rename = "ExternalSubscribedPersistent")]
+    QueueSubscribed { name: String },
+
+    /// A persistent external event was raised. Matched by name using FIFO
+    /// mailbox semantics (not positional). Events stick around until consumed.
+    #[serde(rename = "ExternalEventPersistent")]
+    QueueEventDelivered { name: String, data: String },
+
+    /// A persistent external event subscription was cancelled (e.g., lost a select2 race).
+    /// Correlates to the QueueSubscribed event via Event.source_event_id.
+    /// This breadcrumb ensures correct CAN carry-forward — cancelled subscriptions
+    /// are not counted as having consumed an arrival.
+    #[serde(rename = "ExternalSubscribedPersistentCancelled")]
+    QueueSubscriptionCancelled { reason: String },
 
     /// V2 subscription: includes a topic filter for pub/sub matching.
     /// Feature-gated for replay engine extensibility verification.
@@ -1335,6 +1370,10 @@ pub enum Action {
     /// Optional version string selects the target orchestration version for the new execution.
     ContinueAsNew { input: String, version: Option<String> },
 
+    /// Subscribe to a persistent external event by name (mailbox semantics).
+    /// Unlike WaitExternal, persistent events use FIFO matching and survive cancellation.
+    DequeueEvent { scheduling_event_id: u64, name: String },
+
     /// V2: Subscribe to an external event with topic-based pub/sub matching.
     /// Feature-gated for replay engine extensibility verification.
     #[cfg(feature = "replay-version-test")]
@@ -1389,6 +1428,19 @@ struct CtxInner {
     external_arrivals: std::collections::HashMap<String, Vec<String>>,
     /// Next subscription index per external event name
     external_next_index: std::collections::HashMap<String, usize>,
+    /// Cancelled external subscription schedule_ids (from ExternalSubscribedCancelled breadcrumbs)
+    external_cancelled_subscriptions: std::collections::HashSet<u64>,
+
+    // === Persistent External Event State (mailbox semantics) ===
+    /// Persistent subscriptions: schedule_id -> name
+    /// Each subscription is matched FIFO with persistent arrivals.
+    queue_subscriptions: Vec<(u64, String)>,
+    /// Persistent arrivals: name -> list of payloads in arrival order
+    queue_arrivals: std::collections::HashMap<String, Vec<String>>,
+    /// Persistent subscriptions that have been cancelled (dropped without completing)
+    queue_cancelled_subscriptions: std::collections::HashSet<u64>,
+    /// Persistent subscriptions that have already been resolved (consumed an arrival)
+    queue_resolved_subscriptions: std::collections::HashSet<u64>,
 
     // === V2 External Event State (feature-gated) ===
     /// V2 external subscriptions: schedule_id -> (name, topic, subscription_index)
@@ -1416,6 +1468,11 @@ struct CtxInner {
     orchestration_name: String,
     orchestration_version: String,
     logging_enabled_this_poll: bool,
+
+    /// Pending custom status mutation for this turn.
+    /// `None` means no `set_custom_status()` or `reset_custom_status()` was called.
+    /// Plumbed into `ExecutionMetadata` at ack time.
+    custom_status_update: Option<crate::providers::CustomStatusUpdate>,
 }
 
 impl CtxInner {
@@ -1439,6 +1496,11 @@ impl CtxInner {
             external_subscriptions: Default::default(),
             external_arrivals: Default::default(),
             external_next_index: Default::default(),
+            external_cancelled_subscriptions: Default::default(),
+            queue_subscriptions: Default::default(),
+            queue_arrivals: Default::default(),
+            queue_cancelled_subscriptions: Default::default(),
+            queue_resolved_subscriptions: Default::default(),
             #[cfg(feature = "replay-version-test")]
             external2_subscriptions: Default::default(),
             #[cfg(feature = "replay-version-test")]
@@ -1457,6 +1519,8 @@ impl CtxInner {
             orchestration_name,
             orchestration_version,
             logging_enabled_this_poll: false,
+
+            custom_status_update: None,
         }
     }
 
@@ -1521,16 +1585,139 @@ impl CtxInner {
             .insert(schedule_id, (name.to_string(), subscription_index));
     }
 
+    /// Check if there is an active (non-cancelled) subscription slot available
+    /// for a positional external event.
+    ///
+    /// Returns `true` if there is at least one active subscription for this name
+    /// that hasn't been matched to an arrival yet. Cancelled subscriptions are
+    /// excluded — they don't occupy arrival slots (compression skips them).
+    fn has_pending_subscription_slot(&self, name: &str) -> bool {
+        let active_subs = self
+            .external_subscriptions
+            .iter()
+            .filter(|(sid, (n, _))| n == name && !self.external_cancelled_subscriptions.contains(sid))
+            .count();
+        let delivered = self.external_arrivals.get(name).map_or(0, |v| v.len());
+        active_subs > delivered
+    }
+
     /// Deliver an external event (appends to arrival list for the name).
     fn deliver_external_event(&mut self, name: String, data: String) {
         self.external_arrivals.entry(name).or_default().push(data);
     }
 
     /// Get external event data for a subscription (by schedule_id).
+    ///
+    /// Uses compressed (effective) indices that skip cancelled subscriptions:
+    /// effective_index = raw_index - count_of_cancelled_subscriptions_with_lower_raw_index
+    ///
+    /// Stale events are prevented from entering the arrival list by the causal
+    /// check in the replay loop (`has_pending_subscription_slot`), so the
+    /// arrival array only contains events that have a matching active slot.
     fn get_external_event(&self, schedule_id: u64) -> Option<&String> {
         let (name, subscription_index) = self.external_subscriptions.get(&schedule_id)?;
+
+        // If this subscription is cancelled, it never resolves
+        if self.external_cancelled_subscriptions.contains(&schedule_id) {
+            return None;
+        }
+
+        // Count cancelled subscriptions for this name with a lower raw index
+        let cancelled_below = self
+            .external_subscriptions
+            .values()
+            .filter(|(n, idx)| n == name && *idx < *subscription_index)
+            .filter(|(_, idx)| {
+                // Check if this subscription's schedule_id is in the cancelled set
+                self.external_subscriptions
+                    .iter()
+                    .any(|(sid, (n, i))| n == name && i == idx && self.external_cancelled_subscriptions.contains(sid))
+            })
+            .count();
+
+        let effective_index = subscription_index - cancelled_below;
         let arrivals = self.external_arrivals.get(name)?;
-        arrivals.get(*subscription_index)
+        arrivals.get(effective_index)
+    }
+
+    /// Mark an external subscription as cancelled.
+    fn mark_external_subscription_cancelled(&mut self, schedule_id: u64) {
+        self.external_cancelled_subscriptions.insert(schedule_id);
+    }
+
+    // === Persistent External Event Methods (mailbox semantics) ===
+
+    /// Bind a persistent subscription.
+    fn bind_queue_subscription(&mut self, schedule_id: u64, name: &str) {
+        self.queue_subscriptions.push((schedule_id, name.to_string()));
+    }
+
+    /// Deliver a persistent external event (appends to arrival list for the name).
+    fn deliver_queue_message(&mut self, name: String, data: String) {
+        self.queue_arrivals.entry(name).or_default().push(data);
+    }
+
+    /// Mark a persistent subscription as cancelled (dropped without completing).
+    fn mark_queue_subscription_cancelled(&mut self, schedule_id: u64) {
+        self.queue_cancelled_subscriptions.insert(schedule_id);
+    }
+
+    /// Get persistent event data for a subscription (by schedule_id).
+    ///
+    /// Uses FIFO matching: the first active (non-cancelled, non-resolved) persistent
+    /// subscription gets the first unmatched persistent arrival for that name.
+    fn get_queue_message(&mut self, schedule_id: u64) -> Option<String> {
+        // Find which name this subscription is for
+        let name = self
+            .queue_subscriptions
+            .iter()
+            .find(|(sid, _)| *sid == schedule_id)
+            .map(|(_, n)| n.clone())?;
+
+        // Already resolved?
+        if self.queue_resolved_subscriptions.contains(&schedule_id) {
+            return None;
+        }
+
+        // Already cancelled?
+        if self.queue_cancelled_subscriptions.contains(&schedule_id) {
+            return None;
+        }
+
+        // Our arrival index is exactly the number of active (non-cancelled)
+        // subscriptions for this name that were created before us.
+        // This guarantees strict FIFO matching regardless of poll order.
+        let arrival_index: usize = self
+            .queue_subscriptions
+            .iter()
+            .take_while(|(sid, _)| *sid != schedule_id)
+            .filter(|(sid, n)| n == &name && !self.queue_cancelled_subscriptions.contains(sid))
+            .count();
+
+        // Get arrivals for this name
+        let arrivals = self.queue_arrivals.get(&name)?;
+
+        if arrival_index < arrivals.len() {
+            // Mark as resolved
+            self.queue_resolved_subscriptions.insert(schedule_id);
+            Some(arrivals[arrival_index].clone())
+        } else {
+            None
+        }
+    }
+
+    /// Get cancelled persistent wait schedule_ids (tokens that were bound and then dropped).
+    fn get_cancelled_queue_ids(&self) -> Vec<u64> {
+        let mut ids = Vec::new();
+        for &token in &self.cancelled_tokens {
+            if let Some(kind) = self.cancelled_token_kinds.get(&token)
+                && matches!(kind, ScheduleKind::QueueDequeue { .. })
+                && let Some(&schedule_id) = self.token_bindings.get(&token)
+            {
+                ids.push(schedule_id);
+            }
+        }
+        ids
     }
 
     /// V2: Bind an external subscription with topic to a deterministic index.
@@ -1572,6 +1759,20 @@ impl CtxInner {
         for &token in &self.cancelled_tokens {
             if let Some(kind) = self.cancelled_token_kinds.get(&token)
                 && matches!(kind, ScheduleKind::Activity { .. })
+                && let Some(&schedule_id) = self.token_bindings.get(&token)
+            {
+                ids.push(schedule_id);
+            }
+        }
+        ids
+    }
+
+    /// Get cancelled external wait schedule_ids (tokens that were bound and then dropped).
+    fn get_cancelled_external_wait_ids(&self) -> Vec<u64> {
+        let mut ids = Vec::new();
+        for &token in &self.cancelled_tokens {
+            if let Some(kind) = self.cancelled_token_kinds.get(&token)
+                && matches!(kind, ScheduleKind::ExternalWait { .. })
                 && let Some(&schedule_id) = self.token_bindings.get(&token)
             {
                 ids.push(schedule_id);
@@ -2046,6 +2247,26 @@ impl OrchestrationContext {
         self.inner.lock().unwrap().deliver_external_event(name, data);
     }
 
+    /// Bind a persistent subscription to a schedule_id (used by replay engine).
+    #[doc(hidden)]
+    pub fn bind_queue_subscription(&self, schedule_id: u64, name: &str) {
+        self.inner.lock().unwrap().bind_queue_subscription(schedule_id, name);
+    }
+
+    /// Deliver a persistent external event (used by replay engine).
+    #[doc(hidden)]
+    pub fn deliver_queue_message(&self, name: String, data: String) {
+        self.inner.lock().unwrap().deliver_queue_message(name, data);
+    }
+
+    /// Mark a persistent subscription as cancelled (used by replay engine).
+    pub(crate) fn mark_queue_subscription_cancelled(&self, schedule_id: u64) {
+        self.inner
+            .lock()
+            .unwrap()
+            .mark_queue_subscription_cancelled(schedule_id);
+    }
+
     // =========================================================================
     // Cancellation Support (DurableFuture integration)
     // =========================================================================
@@ -2058,6 +2279,24 @@ impl OrchestrationContext {
     /// Get cancelled activity schedule_ids for this turn.
     pub(crate) fn get_cancelled_activity_ids(&self) -> Vec<u64> {
         self.inner.lock().unwrap().get_cancelled_activity_ids()
+    }
+
+    /// Get cancelled external wait schedule_ids for this turn.
+    pub(crate) fn get_cancelled_external_wait_ids(&self) -> Vec<u64> {
+        self.inner.lock().unwrap().get_cancelled_external_wait_ids()
+    }
+
+    /// Mark an external subscription as cancelled (called by replay engine).
+    pub(crate) fn mark_external_subscription_cancelled(&self, schedule_id: u64) {
+        self.inner
+            .lock()
+            .unwrap()
+            .mark_external_subscription_cancelled(schedule_id);
+    }
+
+    /// Get cancelled persistent wait schedule_ids for this turn.
+    pub(crate) fn get_cancelled_queue_ids(&self) -> Vec<u64> {
+        self.inner.lock().unwrap().get_cancelled_queue_ids()
     }
 
     /// Get cancelled sub-orchestration cancellations for this turn.
@@ -2606,6 +2845,112 @@ impl OrchestrationContext {
         crate::_typed_codec::Json::decode::<Out>(&result)
     }
 
+    /// Schedule an activity with automatic retry on a specific session.
+    ///
+    /// Combines retry semantics from [`Self::schedule_activity_with_retry`] with
+    /// session affinity from [`Self::schedule_activity_on_session`]. All retry
+    /// attempts are pinned to the same `session_id`, ensuring they execute on
+    /// the same worker.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::{OrchestrationContext, RetryPolicy, BackoffStrategy};
+    /// # use std::time::Duration;
+    /// # async fn example(ctx: OrchestrationContext) -> Result<(), String> {
+    /// let session = ctx.new_guid().await?;
+    /// let result = ctx.schedule_activity_with_retry_on_session(
+    ///     "RunQuery",
+    ///     "SELECT 1",
+    ///     RetryPolicy::new(3)
+    ///         .with_backoff(BackoffStrategy::Fixed { delay: Duration::from_secs(1) }),
+    ///     &session,
+    /// ).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if all retry attempts fail or if a timeout occurs (timeouts are not retried).
+    pub async fn schedule_activity_with_retry_on_session(
+        &self,
+        name: impl Into<String>,
+        input: impl Into<String>,
+        policy: RetryPolicy,
+        session_id: impl Into<String>,
+    ) -> Result<String, String> {
+        let name = name.into();
+        let input = input.into();
+        let session_id = session_id.into();
+        let mut last_error = String::new();
+
+        for attempt in 1..=policy.max_attempts {
+            let activity_result = if let Some(timeout) = policy.timeout {
+                let deadline = async {
+                    self.schedule_timer(timeout).await;
+                    Err::<String, String>("timeout: activity timed out".to_string())
+                };
+                let activity = self.schedule_activity_on_session(&name, &input, &session_id);
+
+                match self.select2(activity, deadline).await {
+                    Either2::First(result) => result,
+                    Either2::Second(Err(e)) => return Err(e),
+                    Either2::Second(Ok(_)) => unreachable!(),
+                }
+            } else {
+                self.schedule_activity_on_session(&name, &input, &session_id).await
+            };
+
+            match activity_result {
+                Ok(result) => return Ok(result),
+                Err(e) => {
+                    last_error = e.clone();
+                    if attempt < policy.max_attempts {
+                        self.trace(
+                            "warn",
+                            format!(
+                                "Activity '{}' (session={}) attempt {}/{} failed: {}. Retrying...",
+                                name, session_id, attempt, policy.max_attempts, e
+                            ),
+                        );
+                        let delay = policy.delay_for_attempt(attempt);
+                        if !delay.is_zero() {
+                            self.schedule_timer(delay).await;
+                        }
+                    }
+                }
+            }
+        }
+        Err(last_error)
+    }
+
+    /// Typed variant of [`Self::schedule_activity_with_retry_on_session`].
+    ///
+    /// Serializes input once and deserializes the successful result. All retry
+    /// attempts are pinned to the same session.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if all retry attempts fail, if a timeout occurs, if input
+    /// serialization fails, or if result deserialization fails.
+    pub async fn schedule_activity_with_retry_on_session_typed<
+        In: serde::Serialize,
+        Out: serde::de::DeserializeOwned,
+    >(
+        &self,
+        name: impl Into<String>,
+        input: &In,
+        policy: RetryPolicy,
+        session_id: impl Into<String>,
+    ) -> Result<Out, String> {
+        let payload = crate::_typed_codec::Json::encode(input).expect("encode");
+        let result = self
+            .schedule_activity_with_retry_on_session(name, payload, policy, session_id)
+            .await?;
+        crate::_typed_codec::Json::decode::<Out>(&result)
+    }
+
     /// Schedule a detached orchestration with an explicit instance id.
     /// The runtime will prefix this with the parent instance to ensure global uniqueness.
     pub fn schedule_orchestration(
@@ -2669,6 +3014,54 @@ impl OrchestrationContext {
     ) {
         let payload = crate::_typed_codec::Json::encode(input).expect("encode");
         self.schedule_orchestration_versioned(name, version, instance, payload)
+    }
+
+    /// Set a user-defined custom status for progress reporting.
+    ///
+    /// This is **not** a history event or an action — it's pure metadata that gets
+    /// plumbed into `ExecutionMetadata` at ack time. No impact on determinism,
+    /// no replay implications.
+    ///
+    /// - Call it whenever, as many times as you want within a turn
+    /// - Last write wins: if called twice in the same turn, only the last value is sent
+    /// - Persistent across turns: if you don't call it on a later turn, the provider
+    ///   keeps the previous value
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.set_custom_status("Processing item 3 of 10");
+    /// let result = ctx.schedule_activity("ProcessItem", "item-3").await;
+    /// ctx.set_custom_status("Processing item 4 of 10");
+    /// # }
+    /// ```
+    pub fn set_custom_status(&self, status: impl Into<String>) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.custom_status_update = Some(crate::providers::CustomStatusUpdate::Set(status.into()));
+    }
+
+    /// Clear the custom status back to `None`. The provider will set the column to NULL
+    /// and increment `custom_status_version`.
+    ///
+    /// ```rust,no_run
+    /// # use duroxide::OrchestrationContext;
+    /// # async fn example(ctx: OrchestrationContext) {
+    /// ctx.set_custom_status("Processing batch");
+    /// // ... work ...
+    /// ctx.reset_custom_status(); // done, clear the progress
+    /// # }
+    /// ```
+    pub fn reset_custom_status(&self) {
+        let mut inner = self.inner.lock().unwrap();
+        inner.custom_status_update = Some(crate::providers::CustomStatusUpdate::Clear);
+    }
+
+    /// Returns the pending custom status update for this turn, if any.
+    /// Used internally by the runtime to plumb into `ExecutionMetadata` at ack time.
+    pub(crate) fn custom_status_update(&self) -> Option<crate::providers::CustomStatusUpdate> {
+        self.inner.lock().unwrap().custom_status_update.clone()
     }
 }
 
@@ -2885,6 +3278,76 @@ impl OrchestrationContext {
             let s = fut.await;
             crate::_typed_codec::Json::decode::<T>(&s).expect("decode")
         }
+    }
+
+    /// Dequeue the next message from a named queue (FIFO mailbox semantics).
+    ///
+    /// Unlike `schedule_wait`, queued events use FIFO matching:
+    /// - No positional pairing — any unresolved subscription gets the first unmatched arrival
+    /// - Cancelled subscriptions are skipped (don't consume arrivals)
+    /// - Events that arrive before a subscription are buffered until consumed
+    /// - Events survive `continue_as_new` boundaries (carried forward)
+    ///
+    /// The caller enqueues messages with [`Client::enqueue_event`].
+    pub fn dequeue_event(&self, queue: impl Into<String>) -> DurableFuture<String> {
+        let name: String = queue.into();
+
+        let mut inner = self.inner.lock().expect("Mutex should not be poisoned");
+
+        let token = inner.emit_action(Action::DequeueEvent {
+            scheduling_event_id: 0,
+            name: name.clone(),
+        });
+        drop(inner);
+
+        let ctx = self.clone();
+        let inner_future = std::future::poll_fn(move |_cx| {
+            let mut inner = ctx.inner.lock().expect("Mutex should not be poisoned");
+            if let Some(bound_id) = inner.get_bound_schedule_id(token)
+                && let Some(data) = inner.get_queue_message(bound_id)
+            {
+                return Poll::Ready(data);
+            }
+            Poll::Pending
+        });
+
+        DurableFuture::new(
+            token,
+            ScheduleKind::QueueDequeue { event_name: name },
+            self.clone(),
+            inner_future,
+        )
+    }
+
+    /// Typed version of [`Self::dequeue_event`]. Deserializes the message payload as `T`.
+    pub fn dequeue_event_typed<T: serde::de::DeserializeOwned>(
+        &self,
+        queue: impl Into<String>,
+    ) -> impl Future<Output = T> {
+        let fut = self.dequeue_event(queue);
+        async move {
+            let s = fut.await;
+            crate::_typed_codec::Json::decode::<T>(&s).expect("decode")
+        }
+    }
+
+    /// Subscribe to a persistent external event (mailbox semantics).
+    ///
+    /// Prefer [`Self::dequeue_event`] — this is a deprecated alias.
+    #[deprecated(note = "Use dequeue_event() instead")]
+    pub fn schedule_wait_persistent(&self, name: impl Into<String>) -> DurableFuture<String> {
+        self.dequeue_event(name)
+    }
+
+    /// Typed version of schedule_wait_persistent.
+    ///
+    /// Prefer [`Self::dequeue_event_typed`] — this is a deprecated alias.
+    #[deprecated(note = "Use dequeue_event_typed() instead")]
+    pub fn schedule_wait_persistent_typed<T: serde::de::DeserializeOwned>(
+        &self,
+        name: impl Into<String>,
+    ) -> impl Future<Output = T> {
+        self.dequeue_event_typed(name)
     }
 
     /// V2: Subscribe to an external event with topic-based pub/sub matching.

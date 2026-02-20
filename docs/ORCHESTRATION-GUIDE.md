@@ -481,6 +481,39 @@ let policy = RetryPolicy::new(5)
 let result = ctx.schedule_activity_with_retry("Task", input, policy).await?;
 ```
 
+#### Scheduling Activities with Retry on Session
+
+Combines retry semantics with session affinity — all retry attempts are pinned
+to the same worker session.
+
+```rust
+// String I/O
+async fn schedule_activity_with_retry_on_session(
+    &self,
+    name: impl Into<String>,
+    input: impl Into<String>,
+    policy: RetryPolicy,
+    session_id: impl Into<String>,
+) -> Result<String, String>
+
+// Typed variant
+async fn schedule_activity_with_retry_on_session_typed<In, Out>(
+    &self,
+    name: impl Into<String>,
+    input: &In,
+    policy: RetryPolicy,
+    session_id: impl Into<String>,
+) -> Result<Out, String>
+
+// Usage:
+let session = ctx.new_guid().await?;
+let policy = RetryPolicy::new(3)
+    .with_backoff(BackoffStrategy::Fixed { delay: Duration::from_secs(1) });
+let result = ctx.schedule_activity_with_retry_on_session(
+    "RunQuery", "SELECT 1", policy, &session,
+).await?;
+```
+
 #### Scheduling Timers
 
 ```rust
@@ -492,10 +525,10 @@ ctx.schedule_timer(Duration::from_secs(5)).await;  // Wait 5 seconds
 ctx.schedule_timer(Duration::from_secs(60)).await;  // Wait 1 minute
 ```
 
-#### External Events
+#### External Events (Ephemeral)
 
 ```rust
-// Wait for external signal by name
+// Wait for external signal by name (one-shot, positional matching)
 fn schedule_wait(&self, name: impl Into<String>) -> impl Future<Output = String>
 
 // Usage:
@@ -504,6 +537,50 @@ let approval_data = ctx.schedule_wait("ApprovalEvent").await;
 // Typed version
 let approval: ApprovalData = ctx.schedule_wait_typed("ApprovalEvent").await;
 ```
+
+#### Event Queues (Persistent/FIFO)
+
+Durable FIFO queues that survive `continue_as_new` boundaries. Unlike ephemeral
+events, queue messages are consumed in order and don't require a matching
+subscription before the event is raised.
+
+```rust
+// Dequeue next message from a named queue (blocks until available)
+fn dequeue_event(&self, queue: impl Into<String>) -> impl Future<Output = String>
+
+// Typed variant (auto-deserializes)
+fn dequeue_event_typed<T: DeserializeOwned>(&self, queue: impl Into<String>) -> impl Future<Output = T>
+
+// Usage:
+let msg = ctx.dequeue_event("inbox").await;
+
+// Typed:
+let msg: ChatMessage = ctx.dequeue_event_typed("inbox").await;
+```
+
+**Queue vs Ephemeral events:**
+
+| Feature | `schedule_wait` | `dequeue_event` |
+|---------|-----------------|------------------|
+| Semantics | Positional (Nth wait matches Nth raise) | FIFO queue |
+| Survives CAN | No | Yes |
+| Pre-subscription required | Yes | No |
+| Use case | One-shot signals, approvals | Chat messages, command streams |
+
+#### Custom Status
+
+Publish progress or structured state visible to external clients via polling.
+
+```rust
+// Set custom status (string payload, typically JSON)
+fn set_custom_status(&self, status: &str)
+
+// Usage:
+ctx.set_custom_status(&serde_json::to_string(&MyProgress { pct: 50 }).unwrap());
+```
+
+The status is persisted at the end of each orchestration turn and survives
+`continue_as_new`. Clients read it via `wait_for_status_change()` (see Client API).
 
 #### Sub-Orchestrations
 
@@ -700,6 +777,41 @@ client.raise_event_typed("order-123", "PaymentReceived", &event).await?;
 - External system notifications
 - Timer-based triggers from external schedulers
 
+#### Enqueue Event (Queue Semantics)
+
+```rust
+// Send a message into an orchestration's named queue
+client.enqueue_event("chat-42", "inbox", r#"{"text": "Hello"}"#).await?;
+
+// Typed variant (auto-serializes)
+client.enqueue_event_typed("chat-42", "inbox", &ChatMessage { text: "Hello".into() }).await?;
+```
+
+**Use Cases:**
+- Chat / conversational orchestrations
+- Command streams to long-running orchestrations
+- Any pattern where messages arrive before the orchestration subscribes
+
+#### Poll Custom Status
+
+```rust
+let mut version = 0u64;
+loop {
+    match client.wait_for_status_change("order-123", version, poll_interval, timeout).await? {
+        OrchestrationStatus::Running { custom_status: Some(s), custom_status_version: v, .. } => {
+            version = v;
+            let progress: MyProgress = serde_json::from_str(&s).unwrap();
+            println!("Progress: {}%", progress.pct);
+        }
+        OrchestrationStatus::Completed { .. } => break,
+        _ => break,
+    }
+}
+```
+
+**Tip:** `wait_for_status_change` blocks until the status version advances past
+`last_seen_version`, making it efficient for progress polling without tight loops.
+
 #### Cancel an Orchestration
 
 ```rust
@@ -747,9 +859,9 @@ use duroxide::OrchestrationStatus;
 let status = client.get_orchestration_status("order-123").await?; // Returns Result<OrchestrationStatus, ClientError>
 
 match status {
-    OrchestrationStatus::Running => println!("Still processing..."),
-    OrchestrationStatus::Completed { output } => println!("Done: {}", output),
-    OrchestrationStatus::Failed { details } => {
+    OrchestrationStatus::Running { .. } => println!("Still processing..."),
+    OrchestrationStatus::Completed { output, .. } => println!("Done: {}", output),
+    OrchestrationStatus::Failed { details, .. } => {
         eprintln!("Failed: {}", details.display_message());
         eprintln!("Category: {}", details.category());
     }
@@ -772,10 +884,10 @@ use std::time::Duration;
 let status = client.wait_for_orchestration("order-123", Duration::from_secs(30)).await?;
 
 match status {
-    OrchestrationStatus::Completed { output } => {
+    OrchestrationStatus::Completed { output, .. } => {
         println!("Success: {}", output);
     }
-    OrchestrationStatus::Failed { details } => {
+    OrchestrationStatus::Failed { details, .. } => {
         eprintln!("Failed: {}", details.display_message());
     }
     _ => unreachable!("wait_for_orchestration only returns terminal states"),
@@ -898,15 +1010,15 @@ client.start_orchestration("long-job-1", "ProcessData", "input").await?;
 loop {
     let status = client.get_orchestration_status("long-job-1").await?; // Returns Result<OrchestrationStatus, ClientError>
     match status {
-        OrchestrationStatus::Running => {
+        OrchestrationStatus::Running { .. } => {
             println!("Still running...");
             tokio::time::sleep(Duration::from_secs(5)).await;
         }
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             println!("Completed: {}", output);
             break;
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             eprintln!("Failed: {}", details.display_message());
             break;
         }
@@ -993,8 +1105,8 @@ match client.start_orchestration("test", "MyOrch", "input").await {
 
 // Wait with timeout handling
 match client.wait_for_orchestration("test", Duration::from_secs(10)).await {
-    Ok(OrchestrationStatus::Completed { output }) => println!("Done: {}", output),
-    Ok(OrchestrationStatus::Failed { details }) => {
+    Ok(OrchestrationStatus::Completed { output, .. }) => println!("Done: {}", output),
+    Ok(OrchestrationStatus::Failed { details, .. }) => {
         eprintln!("Orchestration failed: {}", details.display_message());
         
         // Check error category for handling
@@ -1022,10 +1134,12 @@ match client.wait_for_orchestration("test", Duration::from_secs(10)).await {
 | Method | Purpose | Returns |
 |--------|---------|---------|
 | `start_orchestration()` | Start new instance | `Result<(), ClientError>` |
-| `raise_event()` | Send external event | `Result<(), ClientError>` |
+| `raise_event()` | Send ephemeral external event | `Result<(), ClientError>` |
+| `enqueue_event()` | Send queue message (FIFO) | `Result<(), ClientError>` |
 | `cancel_instance()` | Request cancellation | `Result<(), ClientError>` |
 | `get_orchestration_status()` | Check status | `Result<OrchestrationStatus, ClientError>` |
 | `wait_for_orchestration()` | Wait for completion | `Result<OrchestrationStatus, ClientError>` |
+| `wait_for_status_change()` | Poll custom status | `Result<OrchestrationStatus, ClientError>` |
 | `has_management_capability()` | Check feature availability | `bool` |
 | `list_all_instances()` | List instances | `Result<Vec<String>, ClientError>` |
 | `list_instances_by_status()` | Filter by status | `Result<Vec<String>, ClientError>` |
@@ -1339,7 +1453,7 @@ These also abort before your code runs, may be retryable by the runtime.
 **Checking Error Category** (for metrics/logging):
 ```rust
 match client.get_orchestration_status("inst-1").await? { // Returns Result<OrchestrationStatus, ClientError>
-    OrchestrationStatus::Failed { details } => {
+    OrchestrationStatus::Failed { details, .. } => {
         match details.category() {
             "infrastructure" => alert_ops_team(),      // System issue
             "configuration" => alert_dev_team(),       // Deployment issue  
@@ -1983,7 +2097,7 @@ async fn test_full_workflow() {
         .unwrap();
     
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "processed: input");
         }
         _ => panic!("Expected completion"),

@@ -12,6 +12,8 @@ pub mod cancellation;
 #[cfg(feature = "provider-test")]
 pub mod capability_filtering;
 #[cfg(feature = "provider-test")]
+pub mod custom_status;
+#[cfg(feature = "provider-test")]
 pub mod deletion;
 #[cfg(feature = "provider-test")]
 pub mod error_handling;
@@ -92,6 +94,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
                     input: "{}".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             )],
             vec![],

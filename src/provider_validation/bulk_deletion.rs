@@ -378,6 +378,7 @@ async fn create_completed_instance_with_parent(
                     input: "{}".to_string(),
                     parent_instance: parent_instance_id.clone(),
                     parent_id: if parent_instance_id.is_some() { Some(1) } else { None },
+                    carry_forward_events: None,
                 },
             )],
             vec![],
@@ -389,6 +390,7 @@ async fn create_completed_instance_with_parent(
                 orchestration_version: Some("1.0.0".to_string()),
                 parent_instance_id,
                 pinned_duroxide_version: None,
+                custom_status: None,
             },
             vec![],
         )

@@ -93,7 +93,7 @@ async fn code_swap_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             assert!(
                 matches!(
                     details,
@@ -175,7 +175,7 @@ async fn completion_kind_mismatch_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             println!("Got expected error: {}", details.display_message());
             assert!(
                 matches!(
@@ -243,7 +243,7 @@ async fn unexpected_completion_id_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             println!("Got expected error: {}", details.display_message());
             assert!(
                 matches!(
@@ -303,7 +303,7 @@ async fn unexpected_timer_completion_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             println!("Got expected error: {}", details.display_message());
             assert!(
                 matches!(
@@ -405,7 +405,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             println!("Got expected nondeterminism error: {}", details.display_message());
             assert!(
                 matches!(
@@ -418,7 +418,7 @@ async fn continue_as_new_with_unconsumed_completion_triggers_nondeterminism() {
                 "Expected nondeterminism error, got: {details:?}"
             );
         }
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             panic!("Expected nondeterminism failure but orchestration completed: {output}");
         }
         other => panic!("Unexpected status: {other:?}"),
@@ -494,7 +494,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             println!("✓ Orchestration completed successfully: {output}");
             assert_eq!(output, "activity result", "Should get the normal activity result");
             // The orchestration should complete successfully because:
@@ -503,7 +503,7 @@ async fn execution_id_filtering_without_continue_as_new_triggers_nondeterminism(
             // 3. The orchestration continues with its normal flow and gets the real activity result
             // This demonstrates that execution ID filtering prevents cross-execution completions from affecting the orchestration
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!(
                 "Expected successful completion but got error: {}",
                 details.display_message()
@@ -556,7 +556,7 @@ async fn duplicate_external_events_are_handled_gracefully() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             println!("✓ Orchestration completed successfully with output: {output}");
             assert_eq!(output, "first", "Should get the first event");
             // The orchestration should complete successfully because:
@@ -564,7 +564,7 @@ async fn duplicate_external_events_are_handled_gracefully() {
             // 2. Duplicate external event is detected and ignored with a warning
             // 3. No nondeterminism error is raised
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!(
                 "Expected successful completion but got error: {}",
                 details.display_message()

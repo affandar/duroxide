@@ -218,14 +218,14 @@ async fn e2e_eternal_orch_v1_to_v2_event_upgrade() {
         .unwrap();
 
     match &status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(
                 output.as_str(),
                 "final:v1-data-0+v1-data-1+v1-data-2+v2-data-0+v2-data-1",
                 "final output should contain all v1 and v2 data"
             );
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message());
         }
         other => panic!("unexpected status: {other:?}"),
@@ -356,6 +356,7 @@ async fn e2e_upgrade_with_preexisting_v1_history() {
                     input: "seed".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             ),
             ev(
@@ -572,14 +573,14 @@ async fn e2e_upgrade_with_preexisting_v1_history() {
         .unwrap();
 
     match &status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(
                 output.as_str(),
                 "upgraded:old-0+old-1+old-2+new-0+new-1",
                 "output should contain data from both phases"
             );
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message());
         }
         other => panic!("unexpected status: {other:?}"),

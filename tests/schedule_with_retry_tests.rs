@@ -322,7 +322,7 @@ async fn test_activity_succeeds_first_attempt() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "success:test");
         }
         other => panic!("unexpected status: {other:?}"),
@@ -376,7 +376,7 @@ async fn test_activity_fails_then_succeeds() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "success on attempt 3");
         }
         other => panic!("unexpected status: {other:?}"),
@@ -427,14 +427,14 @@ async fn test_activity_exhausts_all_attempts() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             // The orchestration completes with Ok(Err(...)) which becomes the output
             assert!(
                 output.contains("fail on attempt 3"),
                 "expected last error, got: {output}"
             );
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             // Activity error surfaces as orchestration failure
             let msg = details.display_message();
             assert!(msg.contains("fail on attempt 3"), "expected last error, got: {msg}");
@@ -477,10 +477,10 @@ async fn test_single_attempt_fails() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("single failure"), "expected error, got: {output}");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             let msg = details.display_message();
             assert!(msg.contains("single failure"), "expected error, got: {msg}");
         }
@@ -541,7 +541,7 @@ async fn test_retry_with_fixed_backoff() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "done");
         }
         other => panic!("unexpected status: {other:?}"),
@@ -607,7 +607,7 @@ async fn test_retry_with_no_backoff() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "done");
         }
         other => panic!("unexpected status: {other:?}"),
@@ -668,10 +668,10 @@ async fn test_timeout_fires_before_success() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("timeout"), "expected timeout error, got: {output}");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             let msg = details.display_message();
             assert!(msg.contains("timeout"), "expected timeout error, got: {msg}");
         }
@@ -716,7 +716,7 @@ async fn test_success_before_timeout() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "fast:data");
         }
         other => panic!("unexpected status: {other:?}"),
@@ -774,10 +774,10 @@ async fn test_timeout_exits_immediately_without_retry() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("timeout"), "expected timeout error, got: {output}");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             let msg = details.display_message();
             assert!(msg.contains("timeout"), "expected timeout error, got: {msg}");
         }
@@ -879,11 +879,11 @@ async fn test_error_retries_but_timeout_exits() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             // Should be timeout error (not the "fast failure" error)
             assert!(output.contains("timeout"), "expected timeout error, got: {output}");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             let msg = details.display_message();
             assert!(msg.contains("timeout"), "expected timeout error, got: {msg}");
         }
@@ -978,7 +978,7 @@ async fn test_typed_activity_retry_success() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             let result: TypedOutput = serde_json::from_str(&output).unwrap();
             assert_eq!(result, TypedOutput { result: 42 });
         }
@@ -1097,7 +1097,7 @@ async fn test_large_max_attempts_integration() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "done");
         }
         other => panic!("unexpected status: {other:?}"),
@@ -1151,7 +1151,7 @@ async fn test_replay_with_stale_events_in_history() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "done");
         }
         other => panic!("unexpected status: {other:?}"),
@@ -1207,7 +1207,7 @@ async fn test_timeout_history_replays_correctly() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("timeout"), "expected timeout error, got: {output}");
         }
         other => panic!("unexpected status: {other:?}"),
@@ -1278,7 +1278,7 @@ async fn test_activity_completes_after_continue_as_new() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             // Final execution should have count=2
             assert!(
                 output.contains("2"),
@@ -1354,7 +1354,7 @@ async fn test_retry_timeout_with_continue_as_new() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             // Should succeed on execution 1
             assert!(output.contains("success"), "expected success, got: {output}");
         }
@@ -1431,14 +1431,14 @@ async fn test_multiple_orchestrations_retrying() {
         .unwrap();
 
     match result1 {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("flaky1 ok"), "expected flaky1 success, got: {output}");
         }
         other => panic!("unexpected status for multi-1: {other:?}"),
     }
 
     match result2 {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("flaky2 ok"), "expected flaky2 success, got: {output}");
         }
         other => panic!("unexpected status for multi-2: {other:?}"),
@@ -1448,5 +1448,185 @@ async fn test_multiple_orchestrations_retrying() {
     assert_eq!(counter1.load(Ordering::SeqCst), 2, "flaky1 should have 2 attempts");
     assert_eq!(counter2.load(Ordering::SeqCst), 3, "flaky2 should have 3 attempts");
 
+    rt.shutdown(None).await;
+}
+
+// ============================================================================
+// schedule_activity_with_retry_on_session tests
+// ============================================================================
+
+/// Basic retry on session: activity fails once then succeeds, all on same session.
+#[tokio::test]
+async fn retry_on_session_basic_success() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+    let counter = Arc::new(AtomicU32::new(0));
+    let c = counter.clone();
+
+    let activities = ActivityRegistry::builder()
+        .register("FlakySession", move |_ctx: ActivityContext, _input: String| {
+            let counter = c.clone();
+            async move {
+                let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                if attempt < 2 {
+                    Err(format!("fail attempt {attempt}"))
+                } else {
+                    Ok(format!("ok attempt {attempt}"))
+                }
+            }
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("RetrySession", |ctx: OrchestrationContext, _: String| async move {
+            let session = ctx.new_guid().await?;
+            ctx.schedule_activity_with_retry_on_session(
+                "FlakySession",
+                "input",
+                RetryPolicy::new(3).with_backoff(BackoffStrategy::None),
+                &session,
+            )
+            .await
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("retry-sess-1", "RetrySession", "")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("retry-sess-1", Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    match status {
+        OrchestrationStatus::Completed { output, .. } => {
+            assert_eq!(output, "ok attempt 2");
+        }
+        other => panic!("Expected Completed, got: {other:?}"),
+    }
+
+    assert_eq!(counter.load(Ordering::SeqCst), 2, "Should have 2 attempts");
+    rt.shutdown(None).await;
+}
+
+/// All retry attempts fail on session — returns last error.
+#[tokio::test]
+async fn retry_on_session_all_attempts_fail() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let activities = ActivityRegistry::builder()
+        .register("AlwaysFail", |_ctx: ActivityContext, _input: String| async move {
+            Err::<String, String>("nope".into())
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("RetrySessionFail", |ctx: OrchestrationContext, _: String| async move {
+            let session = ctx.new_guid().await?;
+            ctx.schedule_activity_with_retry_on_session(
+                "AlwaysFail",
+                "",
+                RetryPolicy::new(2).with_backoff(BackoffStrategy::None),
+                &session,
+            )
+            .await
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("retry-sess-fail", "RetrySessionFail", "")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("retry-sess-fail", Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    match status {
+        OrchestrationStatus::Failed { details, .. } => {
+            let msg = details.display_message();
+            assert!(msg.contains("nope"), "expected 'nope', got: {msg}");
+        }
+        other => panic!("Expected Failed, got: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Typed retry on session: serialize input, deserialize output.
+#[tokio::test]
+async fn retry_on_session_typed_round_trip() {
+    #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+    struct Query {
+        sql: String,
+    }
+    #[derive(serde::Serialize, serde::Deserialize, Debug, PartialEq)]
+    struct QueryResult {
+        rows: u32,
+    }
+
+    let (store, _td) = common::create_sqlite_store_disk().await;
+    let counter = Arc::new(AtomicU32::new(0));
+    let c = counter.clone();
+
+    let activities = ActivityRegistry::builder()
+        .register("TypedSessionAct", move |_ctx: ActivityContext, input: String| {
+            let counter = c.clone();
+            async move {
+                let attempt = counter.fetch_add(1, Ordering::SeqCst) + 1;
+                let _q: Query = serde_json::from_str(&input).map_err(|e| e.to_string())?;
+                if attempt < 2 {
+                    Err("transient".into())
+                } else {
+                    Ok(serde_json::to_string(&QueryResult { rows: 42 }).unwrap())
+                }
+            }
+        })
+        .build();
+
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("TypedRetrySession", |ctx: OrchestrationContext, _: String| async move {
+            let session = ctx.new_guid().await?;
+            let result: QueryResult = ctx
+                .schedule_activity_with_retry_on_session_typed(
+                    "TypedSessionAct",
+                    &Query { sql: "SELECT 1".into() },
+                    RetryPolicy::new(3).with_backoff(BackoffStrategy::None),
+                    &session,
+                )
+                .await?;
+            Ok(format!("rows={}", result.rows))
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("typed-retry-sess", "TypedRetrySession", "")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("typed-retry-sess", Duration::from_secs(10))
+        .await
+        .unwrap();
+
+    match status {
+        OrchestrationStatus::Completed { output, .. } => {
+            assert_eq!(output, "rows=42");
+        }
+        other => panic!("Expected Completed, got: {other:?}"),
+    }
+
+    assert_eq!(counter.load(Ordering::SeqCst), 2);
     rt.shutdown(None).await;
 }

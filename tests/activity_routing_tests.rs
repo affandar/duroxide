@@ -111,7 +111,7 @@ async fn same_activity_name_and_input_routes_correctly_across_restart() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "R1,R2");
         }
         other => panic!("Expected Completed, got {other:?}"),

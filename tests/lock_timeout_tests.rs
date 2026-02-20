@@ -90,10 +90,10 @@ async fn orchestration_with_custom_timeout_completes() {
         .unwrap();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "processed: data");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected orchestration status"),
@@ -144,10 +144,10 @@ async fn very_short_lock_timeout_works() {
         .unwrap();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "processed: data");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected orchestration status"),
@@ -202,10 +202,10 @@ async fn long_running_activity_with_lock_renewal() {
         .unwrap();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "completed: data");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected orchestration status"),
@@ -257,10 +257,10 @@ async fn short_activity_no_renewal_needed() {
         .unwrap();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "quick: data");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected orchestration status"),
@@ -315,10 +315,10 @@ async fn lock_renewal_short_timeout() {
         .unwrap();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "medium: data");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected orchestration status"),
@@ -372,10 +372,10 @@ async fn custom_renewal_buffer() {
         .unwrap();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "done: data");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected orchestration status"),
@@ -438,13 +438,13 @@ async fn concurrent_activities_with_renewal() {
         .unwrap();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // All three tasks should complete
             assert!(output.contains("completed-task1"));
             assert!(output.contains("completed-task2"));
             assert!(output.contains("completed-task3"));
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected orchestration status"),
@@ -540,11 +540,11 @@ async fn orchestration_lock_renewal_prevents_expiration() {
     test_hooks::clear_orch_processing_delay();
 
     match status {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("completed"));
             assert!(output.contains("done"));
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!(
                 "Orchestration failed - lock renewal may not be working: {}",
                 details.display_message()

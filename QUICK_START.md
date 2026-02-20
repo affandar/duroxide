@@ -119,8 +119,12 @@ async fn approval_workflow(ctx: OrchestrationContext) -> String {
 
 ### OrchestrationContext Methods
 - `ctx.schedule_activity(name, input)` - Schedule an activity (returns `impl Future<Output = Result<String, String>>`)
+- `ctx.schedule_activity_with_retry(name, input, policy)` - Activity with automatic retry
+- `ctx.schedule_activity_on_session(name, input, session_id)` - Activity pinned to a worker session
 - `ctx.schedule_timer(delay)` - Create a timer (returns `impl Future<Output = ()>`)
 - `ctx.schedule_wait(event_name)` - Wait for external event (returns `impl Future<Output = String>`)
+- `ctx.dequeue_event(queue)` - Dequeue from a durable FIFO queue (survives continue-as-new)
+- `ctx.set_custom_status(json)` - Publish progress/state visible via `client.wait_for_status_change()`
 - `ctx.schedule_sub_orchestration(name, input)` - Start child orchestration (returns `impl Future<Output = Result<String, String>>`)
 - `ctx.join(futures)` - Wait for all futures to complete
 - `ctx.select2(future1, future2)` - Race between two futures (returns `Either2<T1, T2>`)

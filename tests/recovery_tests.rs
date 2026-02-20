@@ -97,8 +97,8 @@ where
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "1234"),
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "1234"),
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -355,7 +355,7 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
             .await
             .unwrap()
         {
-            OrchestrationStatus::Completed { output } => match *name {
+            OrchestrationStatus::Completed { output, .. } => match *name {
                 "EchoWait" => assert_eq!(output, format!("done:{input}")),
                 "UpperOnly" => assert_eq!(output, format!("upper:{}", input.to_uppercase())),
                 "WaitEvent" => assert_eq!(output, format!("acked:{input}")),
@@ -363,8 +363,8 @@ async fn recovery_multiple_orchestrations_sqlite_provider() {
                 "TwoTimers" => assert_eq!(output, format!("twodone:{input}")),
                 _ => unreachable!(),
             },
-            OrchestrationStatus::Failed { details } => panic!("{inst} failed: {}", details.display_message()),
-            OrchestrationStatus::Running | OrchestrationStatus::NotFound => unreachable!(),
+            OrchestrationStatus::Failed { details, .. } => panic!("{inst} failed: {}", details.display_message()),
+            OrchestrationStatus::Running { .. } | OrchestrationStatus::NotFound => unreachable!(),
         }
     }
 

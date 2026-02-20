@@ -299,7 +299,7 @@ async fn join_returns_schedule_order() {
         .unwrap();
 
     match status {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             // A was scheduled first, B second - join returns in schedule order
             assert_eq!(output, "A,B", "join should return results in schedule order");
         }
@@ -389,14 +389,14 @@ async fn test_select2_loser_event_consumed_during_replay() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             // Should complete successfully now that the bug is fixed
             assert!(
                 output.contains("first:"),
                 "expected successful completion, got: {output}"
             );
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             let msg = details.display_message();
             panic!("should not fail with nondeterminism anymore: {msg}");
         }
@@ -488,10 +488,10 @@ async fn test_select2_schedule_after_winner_returns() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "done");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             let msg = details.display_message();
             panic!("should not fail with nondeterminism anymore: {msg}");
         }
@@ -579,7 +579,7 @@ async fn simplified_futures_unawaited_completion_does_not_block() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             // Both should complete
             assert!(output.contains("B=B:second"), "Should have B result: {output}");
             assert!(output.contains("A=A:first"), "Should have A result: {output}");
@@ -588,7 +588,7 @@ async fn simplified_futures_unawaited_completion_does_not_block() {
             assert_eq!(A_COUNTER.load(Ordering::SeqCst), 1, "A should run once");
             assert_eq!(B_COUNTER.load(Ordering::SeqCst), 1, "B should run once");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),

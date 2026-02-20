@@ -57,7 +57,7 @@ async fn test_status_running() {
 
     let status = client.get_orchestration_status("test-running").await.unwrap();
     assert!(
-        matches!(status, OrchestrationStatus::Running),
+        matches!(status, OrchestrationStatus::Running { .. }),
         "Expected Running, got: {status:?}"
     );
 
@@ -97,7 +97,7 @@ async fn test_status_completed() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "result: test-input");
         }
         other => panic!("Expected Completed, got: {other:?}"),
@@ -106,7 +106,7 @@ async fn test_status_completed() {
     // Check status again (should still be Completed)
     let status = client.get_orchestration_status("test-completed").await.unwrap();
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "result: test-input");
         }
         other => panic!("Expected Completed on re-check, got: {other:?}"),
@@ -148,7 +148,7 @@ async fn test_status_failed() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             assert!(matches!(
                 details,
                 duroxide::ErrorDetails::Application {
@@ -164,7 +164,7 @@ async fn test_status_failed() {
     // Check status again (should still be Failed)
     let status = client.get_orchestration_status("test-failed").await.unwrap();
     match status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             assert!(matches!(
                 details,
                 duroxide::ErrorDetails::Application {
@@ -218,11 +218,11 @@ async fn test_status_after_continue_as_new() {
 
     while std::time::Instant::now() < deadline {
         match client.get_orchestration_status("test-continue").await.unwrap() {
-            OrchestrationStatus::Completed { output } if output == "done: 2" => {
+            OrchestrationStatus::Completed { output, .. } if output == "done: 2" => {
                 final_status = Some(output);
                 break;
             }
-            OrchestrationStatus::Failed { details } => {
+            OrchestrationStatus::Failed { details, .. } => {
                 panic!("Orchestration failed unexpectedly: {}", details.display_message());
             }
             _ => {
@@ -292,7 +292,7 @@ async fn test_status_cancelled() {
 
     // Cancellation results in Failed status with Cancelled error
     match status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             assert!(
                 matches!(
                     &details,
@@ -352,7 +352,7 @@ async fn test_status_lifecycle_transitions() {
     tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     let status = client.get_orchestration_status("test-lifecycle").await.unwrap();
     assert!(
-        matches!(status, OrchestrationStatus::Running),
+        matches!(status, OrchestrationStatus::Running { .. }),
         "Should be Running after start, got: {status:?}"
     );
 
@@ -362,7 +362,7 @@ async fn test_status_lifecycle_transitions() {
         .await
         .unwrap();
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "quick");
         }
         other => panic!("Expected final Completed, got: {other:?}"),

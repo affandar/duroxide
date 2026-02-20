@@ -262,7 +262,7 @@ async fn e2e_orchestration_item_poison_fails_orchestration() {
 
     // Should be failed with complete poison error details
     match status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             if let ErrorDetails::Poison {
                 attempt_count,
                 max_attempts,
@@ -352,7 +352,7 @@ async fn e2e_activity_item_poison_fails_orchestration() {
 
     // Orchestration should fail with poison error details
     match status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             if let ErrorDetails::Poison {
                 attempt_count,
                 max_attempts,
@@ -437,7 +437,7 @@ async fn e2e_sub_orchestration_poison_fails_parent() {
 
     // Parent should fail with poison error from child
     match status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             if let ErrorDetails::Poison {
                 attempt_count,
                 max_attempts,
@@ -591,7 +591,7 @@ async fn e2e_custom_max_attempts_respected() {
         .expect("wait should succeed");
 
     match status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             if let ErrorDetails::Poison {
                 attempt_count,
                 max_attempts,
@@ -672,7 +672,7 @@ async fn e2e_activity_poisons_suborchestration_poisons_parent() {
 
     // Grandparent should fail: activity poison → child fails → grandparent fails
     match status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             // The error propagated should be the activity poison error
             if let ErrorDetails::Poison {
                 attempt_count,
@@ -763,7 +763,7 @@ async fn e2e_poison_message_creates_instance_if_missing() {
 
     // Verify: Orchestration should be in Failed state with poison error
     match &status {
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             if let ErrorDetails::Poison {
                 attempt_count,
                 max_attempts,

@@ -344,7 +344,7 @@ async fn durable_copilot_sdk_scaled_out_multi_conversation() {
             .await
             .unwrap();
         match status {
-            runtime::OrchestrationStatus::Completed { output } => {
+            runtime::OrchestrationStatus::Completed { output, .. } => {
                 results.insert(conv_id.to_string(), output);
             }
             other => panic!("Conversation {conv_id} expected completed, got {:?}", other),

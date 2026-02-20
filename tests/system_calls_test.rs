@@ -43,7 +43,7 @@ async fn test_new_guid() {
         .await
         .unwrap();
 
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         // Result should contain two different GUIDs
         let parts: Vec<&str> = output.split(',').collect();
         assert_eq!(parts.len(), 2);
@@ -103,7 +103,7 @@ async fn test_utc_now_ms() {
         .await
         .unwrap();
 
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         // Result should contain two timestamps
         let parts: Vec<&str> = output.split(',').collect();
         assert_eq!(parts.len(), 2);
@@ -157,7 +157,7 @@ async fn test_system_calls_deterministic_replay() {
         .await
         .unwrap();
 
-    let output1 = if let duroxide::runtime::OrchestrationStatus::Completed { output } = status1 {
+    let output1 = if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status1 {
         output
     } else {
         panic!("First run did not complete successfully: {status1:?}");
@@ -175,7 +175,7 @@ async fn test_system_calls_deterministic_replay() {
         .await
         .unwrap();
 
-    let output2 = if let duroxide::runtime::OrchestrationStatus::Completed { output } = status2 {
+    let output2 = if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status2 {
         output
     } else {
         panic!("Second run did not complete successfully: {status2:?}");
@@ -249,7 +249,7 @@ async fn test_system_calls_with_select() {
         .await
         .unwrap();
 
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         println!("Output: {output}");
         // Output should contain winner index, result, guid validation, and time validation
         assert!(output.starts_with("winner:"), "Output should start with 'winner:'");
@@ -325,7 +325,7 @@ async fn test_system_calls_join_with_activities() {
         .await
         .unwrap();
 
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         println!("Output: {output}");
         assert!(output.contains("guid_len:36"), "GUID should be 36 chars");
         assert!(
@@ -410,11 +410,11 @@ async fn test_utc_now_as_activity_input_replays_correctly() {
         .unwrap();
 
     match status {
-        duroxide::runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::runtime::OrchestrationStatus::Completed { output, .. } => {
             println!("Orchestration completed: {}", output);
             assert!(output.starts_with("processed:"), "Should have processed the timestamp");
         }
-        duroxide::runtime::OrchestrationStatus::Failed { details } => {
+        duroxide::runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         other => {
@@ -478,11 +478,11 @@ async fn test_new_guid_as_activity_input_replays_correctly() {
         .unwrap();
 
     match status {
-        duroxide::runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::runtime::OrchestrationStatus::Completed { output, .. } => {
             println!("Orchestration completed: {}", output);
             assert!(output.starts_with("processed:"), "Should have processed the guid");
         }
-        duroxide::runtime::OrchestrationStatus::Failed { details } => {
+        duroxide::runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         other => {
@@ -582,7 +582,7 @@ async fn test_multiple_syscalls_same_type() {
         .await
         .unwrap();
     let output1 = match status1 {
-        duroxide::runtime::OrchestrationStatus::Completed { output } => output,
+        duroxide::runtime::OrchestrationStatus::Completed { output, .. } => output,
         other => panic!("Unexpected status: {other:?}"),
     };
     rt.shutdown(None).await;
@@ -594,7 +594,7 @@ async fn test_multiple_syscalls_same_type() {
         .await
         .unwrap();
     let output2 = match status2 {
-        duroxide::runtime::OrchestrationStatus::Completed { output } => output,
+        duroxide::runtime::OrchestrationStatus::Completed { output, .. } => output,
         other => panic!("Unexpected status: {other:?}"),
     };
     assert_eq!(output1, output2);
@@ -685,7 +685,7 @@ async fn test_cancellation_with_pending_syscall() {
         .unwrap();
 
     match status {
-        duroxide::runtime::OrchestrationStatus::Failed { details } => match details {
+        duroxide::runtime::OrchestrationStatus::Failed { details, .. } => match details {
             duroxide::ErrorDetails::Application {
                 kind: duroxide::AppErrorKind::Cancelled { .. },
                 ..

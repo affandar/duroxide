@@ -36,3 +36,6 @@ mod sessions;
 #[cfg(feature = "replay-version-test")]
 #[path = "scenarios/replay_versioning.rs"]
 mod replay_versioning;
+
+#[path = "scenarios/copilot_chat.rs"]
+mod copilot_chat;

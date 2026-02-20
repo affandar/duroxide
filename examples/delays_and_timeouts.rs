@@ -125,10 +125,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("Wait error: {e:?}"))?
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             println!("✅ Delay example completed: {output}");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             println!("❌ Delay example failed: {}", details.display_message());
         }
         _ => println!("⏳ Delay example still running..."),
@@ -152,10 +152,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("Wait error: {e:?}"))?
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             println!("✅ Timeout example completed: {output}");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             println!("❌ Timeout example failed: {}", details.display_message());
         }
         _ => println!("⏳ Timeout example still running..."),

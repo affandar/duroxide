@@ -275,6 +275,7 @@ async fn test_ack_orchestration_item_atomic() {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ),
         Event::with_event_id(
@@ -526,6 +527,7 @@ async fn test_in_memory_provider_atomic_operations() {
             input: "test-input".to_string(),
             parent_instance: None,
             parent_id: None,
+            carry_forward_events: None,
         },
     )];
 

@@ -340,6 +340,7 @@ impl Default for RuntimeOptions {
 }
 
 mod dispatchers;
+pub mod limits;
 pub mod observability;
 pub mod registry;
 mod state_helpers;
@@ -361,12 +362,29 @@ pub enum OrchestrationStatus {
     /// Instance does not exist
     NotFound,
     /// Instance is currently executing
-    Running,
+    Running {
+        /// User-defined progress string set via `ctx.set_custom_status()`
+        custom_status: Option<String>,
+        /// Monotonically increasing version counter for change detection
+        custom_status_version: u64,
+    },
     /// Instance completed successfully with output
-    Completed { output: String },
+    Completed {
+        output: String,
+        /// Last custom status set before completion
+        custom_status: Option<String>,
+        /// Version at completion time
+        custom_status_version: u64,
+    },
     /// Instance failed with structured error details.
     /// Use `details.category()` to distinguish infrastructure/configuration/application errors.
-    Failed { details: crate::ErrorDetails },
+    Failed {
+        details: crate::ErrorDetails,
+        /// Last custom status set before failure
+        custom_status: Option<String>,
+        /// Version at failure time
+        custom_status_version: u64,
+    },
 }
 
 /// Trait implemented by orchestration handlers that can be invoked by the runtime.
@@ -426,6 +444,7 @@ pub fn kind_of(msg: &WorkItem) -> &'static str {
         WorkItem::ActivityFailed { .. } => "ActivityFailed",
         WorkItem::TimerFired { .. } => "TimerFired",
         WorkItem::ExternalRaised { .. } => "ExternalRaised",
+        WorkItem::QueueMessage { .. } => "ExternalRaisedPersistent",
         #[cfg(feature = "replay-version-test")]
         WorkItem::ExternalRaised2 { .. } => "ExternalRaised2",
         WorkItem::SubOrchCompleted { .. } => "SubOrchCompleted",

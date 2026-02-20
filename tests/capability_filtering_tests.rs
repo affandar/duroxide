@@ -60,7 +60,7 @@ async fn runtime_abandons_incompatible_execution() {
     let client = Client::new(store.clone());
     let status = client.get_orchestration_status("incompat-12").await.unwrap();
     assert!(
-        matches!(status, duroxide::OrchestrationStatus::Running),
+        matches!(status, duroxide::OrchestrationStatus::Running { .. }),
         "Incompatible instance should remain Running (invisible to filtered runtime), got: {status:?}"
     );
 }
@@ -100,7 +100,7 @@ async fn runtime_processes_compatible_execution_normally() {
         .unwrap();
 
     match status {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             assert!(
                 output.contains("compatible-ok"),
                 "Expected compatible-ok in output, got: {output}"
@@ -154,7 +154,7 @@ async fn runtime_abandon_reaches_max_attempts_and_poisons() {
 
     // Item should remain Running — provider filters it out before the runtime sees it
     assert!(
-        matches!(status, duroxide::OrchestrationStatus::Running),
+        matches!(status, duroxide::OrchestrationStatus::Running { .. }),
         "Incompatible instance should remain Running with provider-level filtering, got: {status:?}"
     );
 }
@@ -196,7 +196,7 @@ async fn runtime_abandon_uses_short_delay() {
     let client = Client::new(store.clone());
     let status = client.get_orchestration_status("delay-15").await.unwrap();
     assert!(
-        matches!(status, duroxide::OrchestrationStatus::Running),
+        matches!(status, duroxide::OrchestrationStatus::Running { .. }),
         "Item should still be Running (not immediately poisoned due to abandon delay)"
     );
 
@@ -400,7 +400,7 @@ async fn default_supported_range_excludes_future_versions() {
     let status = client.get_orchestration_status("future-27").await.unwrap();
 
     assert!(
-        matches!(status, duroxide::OrchestrationStatus::Running),
+        matches!(status, duroxide::OrchestrationStatus::Running { .. }),
         "Future-version instance should remain Running (filtered out), got: {status:?}"
     );
 }
@@ -446,7 +446,7 @@ async fn custom_supported_replay_versions_narrows_range() {
     let status = client.get_orchestration_status("narrow-28").await.unwrap();
 
     assert!(
-        matches!(status, duroxide::OrchestrationStatus::Running),
+        matches!(status, duroxide::OrchestrationStatus::Running { .. }),
         "v1.0.0 instance should remain Running with v2.x-only range, got: {status:?}"
     );
 }
@@ -581,7 +581,7 @@ async fn sub_orchestration_gets_own_pinned_version() {
         .unwrap();
 
     match &status {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             assert!(
                 output.contains("child-done"),
                 "Parent output should include child result, got: {output}"

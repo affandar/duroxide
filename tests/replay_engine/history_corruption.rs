@@ -404,7 +404,8 @@ fn orphan_timer_fired() {
     assert_nondeterminism(&result);
 }
 
-/// Orphan external event (no subscription) is filtered silently.
+/// Orphan external event (no subscription) is materialized unconditionally.
+/// The replay loop's causal check skips delivery, but the event remains in history.
 #[test]
 fn orphan_external_event() {
     let history = vec![started_event(1)]; // No subscriptions
@@ -413,8 +414,8 @@ fn orphan_external_event() {
     // Send external event with no matching subscription
     engine.prep_completions(vec![external_raised_msg("UnknownEvent", "data")]);
 
-    // External events without subscription are just filtered, not an error
-    assert!(engine.history_delta().is_empty());
+    // External events are materialized unconditionally (causal check is in replay loop)
+    assert_eq!(engine.history_delta().len(), 1);
 
     let result = execute(&mut engine, ImmediateHandler::ok("done"));
     assert_completed(&result, "done");

@@ -263,6 +263,33 @@ pub struct ExecutionMetadata {
     /// in the orchestration dispatcher. The provider does not need to enforce write-once
     /// semantics — it simply stores what it's told.
     pub pinned_duroxide_version: Option<semver::Version>,
+
+    /// User-defined custom status for progress reporting.
+    ///
+    /// - `None`: No update requested. The provider must not modify the existing value.
+    /// - `Some(CustomStatusUpdate::Set(s))`: Write `s` to `custom_status` and increment `custom_status_version`.
+    /// - `Some(CustomStatusUpdate::Clear)`: Set `custom_status` to NULL and increment `custom_status_version`.
+    ///
+    /// This is not a history event — it's pure metadata set by `ctx.set_custom_status()` /
+    /// `ctx.reset_custom_status()` and plumbed through at ack time. Last write per turn wins.
+    /// Persists across turns if not re-set.
+    pub custom_status: Option<CustomStatusUpdate>,
+}
+
+/// Describes a custom status mutation requested by the orchestration.
+///
+/// Used in [`ExecutionMetadata::custom_status`]. The runtime wraps this in `Option`:
+/// - `None` → no change this turn (user did not call `set_custom_status` or `reset_custom_status`)
+/// - `Some(Set(s))` → write `s` to the `custom_status` column
+/// - `Some(Clear)` → reset `custom_status` to NULL
+///
+/// Both `Set` and `Clear` also increment `custom_status_version`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CustomStatusUpdate {
+    /// Set the custom status to the given string.
+    Set(String),
+    /// Clear the custom status back to NULL.
+    Clear,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.
@@ -402,6 +429,19 @@ pub enum WorkItem {
         orchestration: String,
         input: String,
         version: Option<String>,
+        /// Persistent events carried forward from the previous execution.
+        /// These are seeded into the new execution's history before any new
+        /// externally-raised events, preserving FIFO order across CAN boundaries.
+        #[serde(default)]
+        carry_forward_events: Vec<(String, String)>,
+    },
+
+    /// Persistent external event raised (goes to orchestrator queue).
+    /// Matched by `name` using FIFO mailbox semantics — events stick around until consumed.
+    QueueMessage {
+        instance: String,
+        name: String,
+        data: String,
     },
 
     /// V2: External event with topic-based pub/sub matching (goes to orchestrator queue).
@@ -1928,6 +1968,27 @@ pub trait Provider: Any + Send + Sync {
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         None
     }
+
+    /// Lightweight check for custom status changes.
+    ///
+    /// Returns `Some((custom_status, version))` if `custom_status_version > last_seen_version`,
+    /// `None` if unchanged. Used by `Client::wait_for_status_change()` polling loop.
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - Instance ID to check
+    /// * `last_seen_version` - The version the caller last observed
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(Some((custom_status, version)))` - Status has changed
+    /// * `Ok(None)` - No change since `last_seen_version`
+    /// * `Err(ProviderError)` - Storage error
+    async fn get_custom_status(
+        &self,
+        _instance: &str,
+        _last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError>;
 }
 
 /// Management and observability provider interface.

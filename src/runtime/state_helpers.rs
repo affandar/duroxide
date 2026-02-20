@@ -76,6 +76,7 @@ impl HistoryManager {
                 input,
                 parent_instance,
                 parent_id,
+                ..
             } = &event.kind
             {
                 execution_id_counter += 1;
@@ -411,6 +412,7 @@ impl WorkItemReader {
                 | WorkItem::ActivityFailed { .. }
                 | WorkItem::TimerFired { .. }
                 | WorkItem::ExternalRaised { .. }
+                | WorkItem::QueueMessage { .. }
                 | WorkItem::SubOrchCompleted { .. }
                 | WorkItem::SubOrchFailed { .. }
                 | WorkItem::CancelInstance { .. } => {
@@ -448,8 +450,25 @@ impl WorkItemReader {
                         orchestration,
                         input,
                         version,
+                        carry_forward_events,
                         ..
-                    } => (orchestration.clone(), input.clone(), version.clone(), None, None, true),
+                    } => {
+                        // Prepend carry-forward events as synthetic completions at the front.
+                        // This guarantees they are materialized before any new externally-raised
+                        // persistent events, preserving FIFO order across CAN boundaries.
+                        let mut carried: Vec<WorkItem> = carry_forward_events
+                            .iter()
+                            .map(|(name, data)| WorkItem::QueueMessage {
+                                instance: instance.to_string(),
+                                name: name.clone(),
+                                data: data.clone(),
+                            })
+                            .collect();
+                        carried.append(&mut completion_messages);
+                        completion_messages = carried;
+
+                        (orchestration.clone(), input.clone(), version.clone(), None, None, true)
+                    }
                     _ => unreachable!(),
                 }
             } else {
@@ -517,6 +536,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
 
@@ -543,6 +563,7 @@ mod tests {
                     input: "test-input".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             ),
             Event::with_event_id(
@@ -576,6 +597,7 @@ mod tests {
                     input: "test-input".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             ),
             Event::with_event_id(
@@ -613,6 +635,7 @@ mod tests {
                     input: "input1".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             ),
             Event::with_event_id(
@@ -635,6 +658,7 @@ mod tests {
                     input: "input2".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             ),
         ];
@@ -659,6 +683,7 @@ mod tests {
                 input: "test".to_string(),
                 parent_instance: Some("parent-instance".to_string()),
                 parent_id: Some(42),
+                carry_forward_events: None,
             },
         )];
 
@@ -707,6 +732,7 @@ mod tests {
             orchestration: "test-orch".to_string(),
             input: "new-input".to_string(),
             version: Some("2.0.0".to_string()),
+            carry_forward_events: vec![],
         }];
 
         let history_mgr = HistoryManager::from_history(&[]);
@@ -748,6 +774,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: Some("parent-inst".to_string()),
                 parent_id: Some(42),
+                carry_forward_events: None,
             },
         )];
 
@@ -826,6 +853,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
         let mgr = HistoryManager::from_history(&history);
@@ -864,6 +892,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
         let mgr = HistoryManager::from_history(&history);
@@ -882,6 +911,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ));
         assert!(!mgr.is_full_history_empty());
@@ -900,6 +930,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
         let mut mgr = HistoryManager::from_history(&history);
@@ -922,5 +953,51 @@ mod tests {
         assert_eq!(iter_events.len(), 2);
         assert!(matches!(iter_events[0].kind, EventKind::OrchestrationStarted { .. }));
         assert!(matches!(iter_events[1].kind, EventKind::OrchestrationCompleted { .. }));
+    }
+
+    #[test]
+    fn test_workitem_reader_can_carry_forward_prepended() {
+        // CAN with carry-forward events + an external completion that arrived later.
+        // The carry-forward events must come BEFORE the external event in completions.
+        let messages = vec![
+            WorkItem::ContinueAsNew {
+                instance: "inst".to_string(),
+                orchestration: "orch".to_string(),
+                input: "new".to_string(),
+                version: None,
+                carry_forward_events: vec![
+                    ("X".to_string(), "old-x".to_string()),
+                    ("Y".to_string(), "old-y".to_string()),
+                ],
+            },
+            WorkItem::QueueMessage {
+                instance: "inst".to_string(),
+                name: "X".to_string(),
+                data: "new-x".to_string(),
+            },
+        ];
+
+        let history_mgr = HistoryManager::from_history(&[]);
+        let reader = WorkItemReader::from_messages(&messages, &history_mgr, "inst");
+
+        assert!(reader.is_continue_as_new);
+        assert_eq!(reader.completion_messages.len(), 3);
+        // Carry-forward events first (FIFO order preserved)
+        assert!(matches!(
+            &reader.completion_messages[0],
+            WorkItem::QueueMessage { name, data, .. }
+            if name == "X" && data == "old-x"
+        ));
+        assert!(matches!(
+            &reader.completion_messages[1],
+            WorkItem::QueueMessage { name, data, .. }
+            if name == "Y" && data == "old-y"
+        ));
+        // New event comes last
+        assert!(matches!(
+            &reader.completion_messages[2],
+            WorkItem::QueueMessage { name, data, .. }
+            if name == "X" && data == "new-x"
+        ));
     }
 }

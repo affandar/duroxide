@@ -268,7 +268,7 @@ async fn test_builtins_exist_with_empty_registry() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
+        OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "ok"),
         other => panic!("Expected Completed, got {other:?}"),
     }
 }
@@ -378,8 +378,8 @@ async fn activity_context_metadata() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "ok"),
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),

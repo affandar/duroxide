@@ -8,9 +8,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    DeleteInstanceResult, DispatcherCapabilityFilter, ExecutionInfo, InstanceFilter, InstanceInfo, OrchestrationItem,
-    Provider, ProviderAdmin, ProviderError, PruneOptions, PruneResult, QueueDepths, ScheduledActivityIdentifier,
-    SessionFetchConfig, SystemMetrics, WorkItem,
+    CustomStatusUpdate, DeleteInstanceResult, DispatcherCapabilityFilter, ExecutionInfo, InstanceFilter, InstanceInfo,
+    OrchestrationItem, Provider, ProviderAdmin, ProviderError, PruneOptions, PruneResult, QueueDepths,
+    ScheduledActivityIdentifier, SessionFetchConfig, SystemMetrics, WorkItem,
 };
 use crate::{Event, EventKind};
 
@@ -70,6 +70,7 @@ impl SqliteProvider {
             | WorkItem::ActivityFailed { instance, .. }
             | WorkItem::TimerFired { instance, .. }
             | WorkItem::ExternalRaised { instance, .. }
+            | WorkItem::QueueMessage { instance, .. }
             | WorkItem::CancelInstance { instance, .. }
             | WorkItem::ContinueAsNew { instance, .. } => instance,
             #[cfg(feature = "replay-version-test")]
@@ -270,6 +271,8 @@ impl SqliteProvider {
                 orchestration_name TEXT NOT NULL,
                 orchestration_version TEXT,
                 current_execution_id INTEGER NOT NULL DEFAULT 1,
+                custom_status TEXT,
+                custom_status_version INTEGER NOT NULL DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 parent_instance_id TEXT REFERENCES instances(instance_id)
@@ -317,6 +320,26 @@ impl SqliteProvider {
                 .execute(pool)
                 .await?;
             debug!("Added output column to executions table");
+        }
+
+        // Migration: Add custom_status columns to instances table if they don't exist
+        // (was previously on executions; moved to instances so status survives ContinueAsNew)
+        let custom_status_on_instances: bool = sqlx::query_scalar::<_, i64>(
+            "SELECT COUNT(*) FROM pragma_table_info('instances') WHERE name = 'custom_status'",
+        )
+        .fetch_one(pool)
+        .await
+        .unwrap_or(0)
+            > 0;
+
+        if !custom_status_on_instances {
+            sqlx::query("ALTER TABLE instances ADD COLUMN custom_status TEXT")
+                .execute(pool)
+                .await?;
+            sqlx::query("ALTER TABLE instances ADD COLUMN custom_status_version INTEGER NOT NULL DEFAULT 0")
+                .execute(pool)
+                .await?;
+            debug!("Added custom_status columns to instances table");
         }
 
         sqlx::query(
@@ -536,6 +559,10 @@ impl SqliteProvider {
                 EventKind::SubOrchestrationFailed { .. } => "SubOrchestrationFailed",
                 EventKind::SubOrchestrationCancelRequested { .. } => "SubOrchestrationCancelRequested",
                 EventKind::OrchestrationCancelRequested { .. } => "OrchestrationCancelRequested",
+                EventKind::ExternalSubscribedCancelled { .. } => "ExternalSubscribedCancelled",
+                EventKind::QueueSubscribed { .. } => "ExternalSubscribedPersistent",
+                EventKind::QueueEventDelivered { .. } => "ExternalEventPersistent",
+                EventKind::QueueSubscriptionCancelled { .. } => "ExternalSubscribedPersistentCancelled",
                 EventKind::OrchestrationChained { .. } => "OrchestrationChained",
                 #[cfg(feature = "replay-version-test")]
                 EventKind::ExternalSubscribed2 { .. } => "ExternalSubscribed2",
@@ -1127,6 +1154,52 @@ impl Provider for SqliteProvider {
             );
         }
 
+        // Update custom_status on the instances table if requested.
+        // Custom status is instance-scoped (survives ContinueAsNew).
+        match &metadata.custom_status {
+            Some(CustomStatusUpdate::Set(custom_status)) => {
+                sqlx::query(
+                    r#"
+                    UPDATE instances 
+                    SET custom_status = ?, custom_status_version = custom_status_version + 1
+                    WHERE instance_id = ?
+                    "#,
+                )
+                .bind(custom_status)
+                .bind(&instance_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+
+                debug!(
+                    instance = %instance_id,
+                    custom_status = %custom_status,
+                    "Updated custom_status"
+                );
+            }
+            Some(CustomStatusUpdate::Clear) => {
+                sqlx::query(
+                    r#"
+                    UPDATE instances 
+                    SET custom_status = NULL, custom_status_version = custom_status_version + 1
+                    WHERE instance_id = ?
+                    "#,
+                )
+                .bind(&instance_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| Self::sqlx_to_provider_error("ack_orchestration_item", e))?;
+
+                debug!(
+                    instance = %instance_id,
+                    "Cleared custom_status"
+                );
+            }
+            None => {
+                // No update requested — preserve existing value
+            }
+        }
+
         // Enqueue worker items with identity columns for cancellation support
         debug!(
             instance = %instance_id,
@@ -1215,6 +1288,7 @@ impl Provider for SqliteProvider {
                 | WorkItem::ActivityFailed { instance, .. }
                 | WorkItem::TimerFired { instance, .. }
                 | WorkItem::ExternalRaised { instance, .. }
+                | WorkItem::QueueMessage { instance, .. }
                 | WorkItem::CancelInstance { instance, .. }
                 | WorkItem::ContinueAsNew { instance, .. } => instance,
                 #[cfg(feature = "replay-version-test")]
@@ -1969,6 +2043,34 @@ impl Provider for SqliteProvider {
 
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         Some(self as &dyn ProviderAdmin)
+    }
+
+    async fn get_custom_status(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError> {
+        let row = sqlx::query(
+            r#"
+            SELECT custom_status, custom_status_version
+            FROM instances
+            WHERE instance_id = ? AND custom_status_version > ?
+            "#,
+        )
+        .bind(instance)
+        .bind(last_seen_version as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(|e| Self::sqlx_to_provider_error("get_custom_status", e))?;
+
+        match row {
+            Some(row) => {
+                let custom_status: Option<String> = row.try_get("custom_status").ok().flatten();
+                let version: i64 = row.try_get("custom_status_version").unwrap_or(0);
+                Ok(Some((custom_status, version as u64)))
+            }
+            None => Ok(None),
+        }
     }
 }
 
@@ -2855,6 +2957,7 @@ mod tests {
                         input: input.to_string(),
                         parent_instance: parent_instance.map(|s| s.to_string()),
                         parent_id,
+                        carry_forward_events: None,
                     },
                 )],
                 vec![],
@@ -2919,6 +3022,7 @@ mod tests {
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
 
@@ -2986,6 +3090,7 @@ mod tests {
                     input: "{}".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             ),
             Event::with_event_id(
@@ -3609,6 +3714,7 @@ mod tests {
                         input: "{}".to_string(),
                         parent_instance: None,
                         parent_id: None,
+                        carry_forward_events: None,
                     },
                 )],
                 vec![],

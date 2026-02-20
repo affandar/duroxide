@@ -54,11 +54,11 @@ async fn single_thread_basic_orchestration() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "echo: hello");
             tracing::info!("✓ Single-thread basic orchestration completed");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),
@@ -105,11 +105,11 @@ async fn single_thread_sequential_activities() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "3"); // 0 + 1 + 1 + 1 = 3
             tracing::info!("✓ Single-thread sequential activities completed");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),
@@ -146,11 +146,11 @@ async fn single_thread_timer_handling() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "timer_done");
             tracing::info!("✓ Single-thread timer handling completed");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),
@@ -192,11 +192,11 @@ async fn single_thread_continue_as_new() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "done:3");
             tracing::info!("✓ Single-thread continue-as-new completed");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),
@@ -244,10 +244,10 @@ async fn single_thread_concurrent_orchestrations() {
             .unwrap();
 
         match status {
-            OrchestrationStatus::Completed { output } => {
+            OrchestrationStatus::Completed { output, .. } => {
                 assert_eq!(output, format!("processed:{i}"));
             }
-            OrchestrationStatus::Failed { details } => {
+            OrchestrationStatus::Failed { details, .. } => {
                 panic!("Orchestration {} failed: {}", i, details.display_message());
             }
             _ => panic!("Unexpected status for {i}: {status:?}"),
@@ -299,11 +299,11 @@ async fn single_thread_single_concurrency() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "result:data");
             tracing::info!("✓ Single-thread with single concurrency completed");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),

@@ -271,6 +271,14 @@ impl Provider for PoisonInjectingProvider {
         // Delegate to inner's management capability
         self.inner.as_management_capability()
     }
+
+    async fn get_custom_status(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError> {
+        self.inner.get_custom_status(instance, last_seen_version).await
+    }
 }
 
 /// A provider wrapper that bypasses the capability filter on fetch_orchestration_item.
@@ -408,6 +416,14 @@ impl Provider for FilterBypassProvider {
 
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         self.inner.as_management_capability()
+    }
+
+    async fn get_custom_status(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError> {
+        self.inner.get_custom_status(instance, last_seen_version).await
     }
 }
 
@@ -638,5 +654,13 @@ impl Provider for FailingProvider {
 
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         self.inner.as_management_capability()
+    }
+
+    async fn get_custom_status(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError> {
+        self.inner.get_custom_status(instance, last_seen_version).await
     }
 }
