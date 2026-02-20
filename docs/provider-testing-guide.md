@@ -494,7 +494,7 @@ async fn test_my_provider_worker_queue_fifo_ordering() {
 
 ### What the Tests Validate
 
-The validation test suite includes **112+ individual test functions** organized into 15 categories:
+The validation test suite includes **157 individual test functions** organized into 17 categories:
 
 1. **Atomicity Tests (4 tests)**
    - `test_atomicity_failure_rollback` - All-or-nothing commit semantics, rollback on failure
@@ -522,7 +522,7 @@ The validation test suite includes **112+ individual test functions** organized 
    - `test_multi_threaded_no_duplicate_processing` - No duplicate processing (multi-threaded)
    - `test_multi_threaded_lock_expiration_recovery` - Lock expiration recovery (multi-threaded)
 
-4. **Lock Expiration Tests (11 tests)**
+4. **Lock Expiration Tests (13 tests)**
    - `test_lock_expires_after_timeout` - Automatic lock release after timeout
    - `test_abandon_releases_lock_immediately` - Abandon releases lock immediately
    - `test_lock_renewal_on_ack` - Successful ack releases lock immediately
@@ -534,6 +534,8 @@ The validation test suite includes **112+ individual test functions** organized 
    - `test_worker_lock_renewal_after_ack` - Renewal fails after item has been acked
    - `test_abandon_work_item_releases_lock` - abandon_work_item releases lock immediately
    - `test_abandon_work_item_with_delay` - abandon_work_item with delay defers visibility
+   - `test_worker_ack_fails_after_lock_expiry` - Worker ack rejected after lock expires
+   - `test_orchestration_lock_renewal_after_expiration` - Orchestration lock renewal fails after expiry
 
 5. **Multi-Execution Tests (5 tests)**
    - `test_execution_isolation` - Each execution has separate history
@@ -566,10 +568,12 @@ The validation test suite includes **112+ individual test functions** organized 
    - `test_get_system_metrics` - System metrics are accurate
    - `test_get_queue_depths` - Queue depth reporting is correct
 
-9. **Long Polling Tests (3 tests)**
+9. **Long Polling Tests (5 tests)**
    - `test_short_poll_returns_immediately` - Short-poll providers return immediately when queue is empty
    - `test_short_poll_work_item_returns_immediately` - Worker queue short-poll returns immediately
    - `test_fetch_respects_timeout_upper_bound` - Fetch returns within poll_timeout even if blocking
+   - `test_long_poll_waits_for_timeout` - Long-poll orchestration fetch waits for duration
+   - `test_long_poll_work_item_waits_for_timeout` - Long-poll worker fetch waits for duration
 
 10. **Poison Message Tests (9 tests)**
    - `orchestration_attempt_count_starts_at_one` - First fetch has attempt_count = 1
@@ -615,10 +619,11 @@ The validation test suite includes **112+ individual test functions** organized 
     - `test_force_delete_prevents_ack_recreation` - Force delete prevents ack from recreating
     - `test_stale_activity_after_delete_recreate` - Stale activity completion after delete+recreate doesn't corrupt new instance
 
-13. **Pruning Tests (3 tests)** - `duroxide::provider_validations::prune`
+13. **Pruning Tests (4 tests)** - `duroxide::provider_validations::prune`
     - `test_prune_options_combinations` - Verify keep_last and completed_before work together
     - `test_prune_safety` - Current execution never pruned, including terminal instances
     - `test_prune_bulk` - Bulk prune across multiple instances
+    - `test_prune_bulk_includes_running_instances` - Prune includes Running instances with CAN history (not just terminal)
 
 14. **Bulk Deletion Tests (4 tests)** - `duroxide::provider_validations::bulk_deletion`
     - `test_delete_instance_bulk_completed_before_filter` - Filter by completion timestamp
@@ -1030,7 +1035,7 @@ This generates `stress-test-results.md` with:
 
 - **Test Implementation**: `src/provider_validation/` (individual test modules)
 - **Test API**: `src/provider_validations.rs` (test function exports)
-- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 114 tests)
+- **Example Usage**: `tests/sqlite_provider_validations.rs` (complete example with all 157 tests)
 - **Test Specification**: See individual test function documentation
 - **Provider Guide**: `docs/provider-implementation-guide.md`
 - **Built-in Providers**: `src/providers/sqlite.rs`
