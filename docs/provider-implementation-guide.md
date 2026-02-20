@@ -207,6 +207,7 @@ Work queues hold items waiting to be processed. Each item represents something t
 - `ActivityCompleted` / `ActivityFailed` — Activity finished
 - `TimerFired` — A timer expired
 - `ExternalEvent` — External system sent an event
+- `QueueMessage` — Persistent event queued via `client.enqueue_event()` (FIFO mailbox)
 - `SubOrchCompleted` / `SubOrchFailed` — Child orchestration finished
 - `CancelInstance` — Cancellation requested
 
@@ -344,6 +345,7 @@ Here's every method you need to implement, organized by complexity:
 | `append_with_execution()` | Append events to history | ⭐ Easy |
 | `enqueue_for_worker()` | Add item to worker queue | ⭐ Easy |
 | `enqueue_orchestrator_work()` | Add item to orchestrator queue | ⭐ Easy |
+| `get_custom_status()` | Lightweight status polling | ⭐ Easy |
 
 ### Queue Operations (Medium Complexity)
 
@@ -516,6 +518,16 @@ impl Provider for MyProvider {
         idle_timeout: Duration,
     ) -> Result<usize, ProviderError> {
         todo!("Sweep expired sessions with no pending work")
+    }
+    
+    // === Custom Status ===
+    
+    async fn get_custom_status(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError> {
+        todo!("Return (custom_status, version) if version > last_seen_version")
     }
 }
 ```
@@ -1006,6 +1018,20 @@ SET current_execution_id = MAX(current_execution_id, excluded.current_execution_
     orchestration_version = COALESCE(excluded.orchestration_version, orchestration_version),
     status = excluded.status,
     output = excluded.output
+
+-- Step 2a: Apply custom_status update (if any)
+IF metadata.custom_status IS NOT NULL:
+    IF metadata.custom_status IS Set(value):
+        UPDATE instances
+        SET custom_status = value,
+            custom_status_version = custom_status_version + 1
+        WHERE instance_id = instance
+    ELSE IF metadata.custom_status IS Clear:
+        UPDATE instances
+        SET custom_status = NULL,
+            custom_status_version = custom_status_version + 1
+        WHERE instance_id = instance
+-- When metadata.custom_status IS NULL, no change to custom_status/version this turn
 
 -- Step 3: Append events to history (APPEND-ONLY — never read/deserialize existing rows)
 -- This constraint is critical: the runtime may ack with new events even when existing
@@ -1541,6 +1567,28 @@ WHERE locked_until < $now
 - Any worker can sweep any worker's orphans
 - Providers with built-in cleanup (TTL, eager eviction) may return `Ok(0)`
 
+### get_custom_status() — Lightweight Status Polling
+
+Clients poll for orchestration progress via `client.wait_for_status_change()`. This method
+provides an efficient check — it only returns data when the version has advanced.
+
+**Pseudocode:**
+```sql
+SELECT custom_status, custom_status_version
+FROM instances
+WHERE instance_id = $instance
+  AND custom_status_version > $last_seen_version
+```
+
+**Returns:**
+- `Ok(Some((custom_status, version)))` — The status has changed since `last_seen_version`
+- `Ok(None)` — No change, or instance doesn't exist
+
+**Key semantics:**
+- This is a read-only, non-locking operation (no peek-lock)
+- `custom_status` may be `None` (cleared via `CustomStatusUpdate::Clear`)
+- Version starts at 0 and increments on every `Set` or `Clear` during ack
+
 ---
 
 ## Advanced Topics
@@ -1639,6 +1687,8 @@ CREATE TABLE instances (
     current_execution_id INTEGER NOT NULL DEFAULT 1,
     status TEXT NOT NULL DEFAULT 'Running',  -- Running, Completed, Failed
     output TEXT,
+    custom_status TEXT,                      -- opaque JSON set by ctx.set_custom_status()
+    custom_status_version INTEGER NOT NULL DEFAULT 0,  -- incremented on each set/clear
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL
 );
@@ -1886,6 +1936,13 @@ Before considering your provider complete:
 - [ ] `ack_orchestration_item()` enqueues before cancelling (ordering)
 - [ ] `ack_orchestration_item()` stores `pinned_duroxide_version` unconditionally from `ExecutionMetadata` when provided (no write-once guard — the runtime enforces this invariant)
 - [ ] `ack_orchestration_item()` is append-only for history — INSERTs new events without reading/deserializing existing rows (required for corrupted-history poison termination)
+- [ ] `ack_orchestration_item()` applies `CustomStatusUpdate::Set` / `Clear` when `metadata.custom_status` is `Some`, incrementing `custom_status_version`
+- [ ] `ack_orchestration_item()` does NOT touch `custom_status` when `metadata.custom_status` is `None`
+
+### Custom Status
+- [ ] `get_custom_status()` returns `Ok(Some((status, version)))` when `version > last_seen_version`
+- [ ] `get_custom_status()` returns `Ok(None)` when version unchanged
+- [ ] `get_custom_status()` returns `Ok(None)` for non-existent instances
 
 ### Concurrency
 - [ ] Lock acquisition is atomic (no check-then-set)
