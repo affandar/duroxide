@@ -31,6 +31,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
 
@@ -113,6 +114,7 @@ mod tests {
                     input: "test-input".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             ),
             Event::with_event_id(
@@ -206,6 +208,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
 
@@ -248,6 +251,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
 
@@ -297,6 +301,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
 
@@ -362,6 +367,7 @@ mod tests {
                 input: "test-input".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         )];
 

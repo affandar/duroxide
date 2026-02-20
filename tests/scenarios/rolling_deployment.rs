@@ -162,14 +162,14 @@ async fn e2e_rolling_deployment_three_nodes() {
 
     // Orchestration should complete successfully
     match status {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("NewActivity result"));
             assert!(
                 activity_executed.load(Ordering::SeqCst),
                 "Activity should have been executed"
             );
         }
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed unexpectedly: {details:?}")
         }
         _ => panic!("Unexpected orchestration status"),
@@ -316,10 +316,10 @@ async fn e2e_rolling_deployment_version_upgrade() {
 
     // Should complete successfully with v2 output
     match status {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("v2-completed"), "Expected v2 output, got: {output}");
         }
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed unexpectedly: {details:?}")
         }
         _ => panic!("Unexpected orchestration status"),

@@ -151,8 +151,8 @@ async fn cancel_after_completion_is_noop() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "ok"),
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -214,8 +214,8 @@ async fn cancel_child_directly_signals_parent() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => output,
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => output,
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -281,7 +281,7 @@ async fn cancel_continue_as_new_second_exec() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             assert!(matches!(
                 details,
                 duroxide::ErrorDetails::Application {
@@ -290,7 +290,7 @@ async fn cancel_continue_as_new_second_exec() {
                 } if reason == "by_test_can"
             ));
         }
-        runtime::OrchestrationStatus::Completed { output } => panic!("expected cancellation, got: {output}"),
+        runtime::OrchestrationStatus::Completed { output, .. } => panic!("expected cancellation, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -355,8 +355,8 @@ async fn orchestration_completes_before_activity_finishes() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "done"),
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -403,8 +403,8 @@ async fn orchestration_fails_before_activity_finishes() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Failed { details: _ } => {} // Expected failure
-        runtime::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        runtime::OrchestrationStatus::Failed { details: _, .. } => {} // Expected failure
+        runtime::OrchestrationStatus::Completed { output, .. } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -1452,7 +1452,7 @@ async fn explicit_drop_activity_triggers_cancellation() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "completed_after_drop");
         }
         other => panic!("Expected Completed, got {:?}", other),
@@ -1574,7 +1574,7 @@ async fn activity_out_of_scope_triggers_cancellation() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "completed_without_await");
         }
         other => panic!("Expected Completed, got {:?}", other),
@@ -1638,7 +1638,7 @@ async fn select2_loser_sub_orchestration_cancelled() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "timer_won", "Timer should win the race");
         }
         other => panic!("Expected parent Completed, got {:?}", other),
@@ -1659,7 +1659,7 @@ async fn select2_loser_sub_orchestration_cancelled() {
     loop {
         let child_status = client.get_orchestration_status(&full_child_id).await.unwrap();
         match child_status {
-            runtime::OrchestrationStatus::Failed { details } => {
+            runtime::OrchestrationStatus::Failed { details, .. } => {
                 // Child should be cancelled
                 assert!(
                     matches!(
@@ -1674,10 +1674,10 @@ async fn select2_loser_sub_orchestration_cancelled() {
                 );
                 break;
             }
-            runtime::OrchestrationStatus::Completed { output } => {
+            runtime::OrchestrationStatus::Completed { output, .. } => {
                 panic!("Child should NOT complete - it was a select2 loser. Got: {output}");
             }
-            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+            runtime::OrchestrationStatus::Running { .. } | runtime::OrchestrationStatus::NotFound => {
                 // Still waiting for cancellation to propagate
                 if std::time::Instant::now() > deadline {
                     panic!("Timeout waiting for child sub-orchestration to be cancelled");
@@ -1742,7 +1742,7 @@ async fn select2_loser_sub_orchestration_explicit_id_cancelled() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "timer_won", "Timer should win the race");
         }
         other => panic!("Expected parent Completed, got {:?}", other),
@@ -1769,7 +1769,7 @@ async fn select2_loser_sub_orchestration_explicit_id_cancelled() {
     loop {
         let child_status = client.get_orchestration_status(full_child_id).await.unwrap();
         match child_status {
-            runtime::OrchestrationStatus::Failed { details } => {
+            runtime::OrchestrationStatus::Failed { details, .. } => {
                 assert!(
                     matches!(
                         &details,
@@ -1783,10 +1783,10 @@ async fn select2_loser_sub_orchestration_explicit_id_cancelled() {
                 );
                 break;
             }
-            runtime::OrchestrationStatus::Completed { output } => {
+            runtime::OrchestrationStatus::Completed { output, .. } => {
                 panic!("Child with explicit ID should NOT complete - it was a select2 loser. Got: {output}");
             }
-            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+            runtime::OrchestrationStatus::Running { .. } | runtime::OrchestrationStatus::NotFound => {
                 if std::time::Instant::now() > deadline {
                     panic!("Timeout waiting for child sub-orchestration with explicit ID to be cancelled");
                 }
@@ -1848,7 +1848,7 @@ async fn explicit_drop_sub_orchestration_cancelled() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "parent_completed_after_drop");
         }
         other => panic!("Expected parent Completed, got {:?}", other),
@@ -1869,7 +1869,7 @@ async fn explicit_drop_sub_orchestration_cancelled() {
     loop {
         let child_status = client.get_orchestration_status(&full_child_id).await.unwrap();
         match child_status {
-            runtime::OrchestrationStatus::Failed { details } => {
+            runtime::OrchestrationStatus::Failed { details, .. } => {
                 assert!(
                     matches!(
                         &details,
@@ -1883,10 +1883,10 @@ async fn explicit_drop_sub_orchestration_cancelled() {
                 );
                 break;
             }
-            runtime::OrchestrationStatus::Completed { output } => {
+            runtime::OrchestrationStatus::Completed { output, .. } => {
                 panic!("Child should NOT complete after being dropped. Got: {output}");
             }
-            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+            runtime::OrchestrationStatus::Running { .. } | runtime::OrchestrationStatus::NotFound => {
                 if std::time::Instant::now() > deadline {
                     panic!("Timeout waiting for dropped child sub-orchestration to be cancelled");
                 }
@@ -2137,6 +2137,14 @@ impl Provider for RecordingProvider {
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         self.inner.as_management_capability()
     }
+
+    async fn get_custom_status(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError> {
+        self.inner.get_custom_status(instance, last_seen_version).await
+    }
 }
 
 /// Ensure a child sub-orchestration can receive CancelInstance from BOTH:
@@ -2228,7 +2236,7 @@ async fn user_cancel_instance_and_dropped_future_both_enqueue_cancelinstance_for
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => assert_eq!(output, "parent_done"),
+        runtime::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "parent_done"),
         other => panic!("Expected parent Completed, got {:?}", other),
     }
 
@@ -2237,7 +2245,7 @@ async fn user_cancel_instance_and_dropped_future_both_enqueue_cancelinstance_for
     loop {
         let child_status = client.get_orchestration_status("combo-child").await.unwrap();
         match child_status {
-            runtime::OrchestrationStatus::Failed { details } => {
+            runtime::OrchestrationStatus::Failed { details, .. } => {
                 assert!(
                     matches!(
                         &details,
@@ -2251,10 +2259,10 @@ async fn user_cancel_instance_and_dropped_future_both_enqueue_cancelinstance_for
                 );
                 break;
             }
-            runtime::OrchestrationStatus::Completed { output } => {
+            runtime::OrchestrationStatus::Completed { output, .. } => {
                 panic!("Child should NOT complete (it was cancelled). Got: {output}");
             }
-            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+            runtime::OrchestrationStatus::Running { .. } | runtime::OrchestrationStatus::NotFound => {
                 if std::time::Instant::now() > deadline {
                     panic!("Timeout waiting for child to be cancelled");
                 }
@@ -2370,7 +2378,7 @@ async fn sub_orchestration_out_of_scope_cancelled() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "parent_completed_without_await");
         }
         other => panic!("Expected parent Completed, got {:?}", other),
@@ -2391,7 +2399,7 @@ async fn sub_orchestration_out_of_scope_cancelled() {
     loop {
         let child_status = client.get_orchestration_status(&full_child_id).await.unwrap();
         match child_status {
-            runtime::OrchestrationStatus::Failed { details } => {
+            runtime::OrchestrationStatus::Failed { details, .. } => {
                 assert!(
                     matches!(
                         &details,
@@ -2405,10 +2413,10 @@ async fn sub_orchestration_out_of_scope_cancelled() {
                 );
                 break;
             }
-            runtime::OrchestrationStatus::Completed { output } => {
+            runtime::OrchestrationStatus::Completed { output, .. } => {
                 panic!("Child should NOT complete when it went out of scope. Got: {output}");
             }
-            runtime::OrchestrationStatus::Running | runtime::OrchestrationStatus::NotFound => {
+            runtime::OrchestrationStatus::Running { .. } | runtime::OrchestrationStatus::NotFound => {
                 if std::time::Instant::now() > deadline {
                     panic!("Timeout waiting for out-of-scope child sub-orchestration to be cancelled");
                 }
@@ -2416,6 +2424,241 @@ async fn sub_orchestration_out_of_scope_cancelled() {
             }
         }
     }
+
+    rt.shutdown(None).await;
+}
+
+#[tokio::test]
+async fn positional_arrival_before_sub_outstanding() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _: String| async move {
+        // Wait a bit so the event arrives before we subscribe
+        ctx.schedule_timer(std::time::Duration::from_millis(100)).await;
+
+        // Subscribe to positional event
+        let wait = ctx.schedule_wait("MyEvent");
+
+        // Timeout after 500ms
+        let timeout = ctx.schedule_timer(std::time::Duration::from_millis(500));
+
+        match ctx.select2(wait, timeout).await {
+            duroxide::Either2::First(_) => Ok("event-received".to_string()),
+            duroxide::Either2::Second(_) => Ok("timeout".to_string()),
+        }
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-pos-arr", "TestOrch", "")
+        .await
+        .unwrap();
+
+    // Raise event immediately (before the 100ms timer finishes)
+    client.raise_event("inst-pos-arr", "MyEvent", "data").await.unwrap();
+
+    // Wait for completion
+    let status = client
+        .wait_for_orchestration("inst-pos-arr", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(
+        matches!(status, runtime::OrchestrationStatus::Completed { ref output, .. } if output == "timeout"),
+        "Expected timeout, got {:?}",
+        status
+    );
+
+    let history = store.read("inst-pos-arr").await.unwrap();
+
+    // The subscription should have a dropped_future cancellation breadcrumb because it lost the select2
+    let has_cancel = history
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::ExternalSubscribedCancelled { reason } if reason == "dropped_future"));
+
+    assert!(
+        has_cancel,
+        "Missing dropped_future cancellation breadcrumb for positional subscription"
+    );
+
+    rt.shutdown(None).await;
+}
+
+/// Bug fix regression: when a `schedule_wait("X")` loses a select2 (timer wins),
+/// its subscription slot is cancelled. A *subsequent* `schedule_wait("X")` must still
+/// receive the next raised event, even though a cancelled slot exists for the same name.
+/// Before the fix, the cancelled slot "stole" the arrival and the active subscription hung.
+#[tokio::test]
+async fn cancelled_subscription_does_not_steal_future_event() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _: String| async move {
+        // Phase 1: schedule_wait loses to timer → cancelled subscription
+        let wait1 = ctx.schedule_wait("Signal");
+        let timeout1 = ctx.schedule_timer(Duration::from_millis(50));
+        match ctx.select2(wait1, timeout1).await {
+            Either2::First(_) => return Ok("unexpected_phase1".to_string()),
+            Either2::Second(_) => {} // timer won as expected
+        }
+
+        // Phase 2: new schedule_wait for the SAME event name
+        let data = ctx.schedule_wait("Signal").await;
+        Ok(format!("got:{data}"))
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
+    let client = Client::new(store.clone());
+
+    client
+        .start_orchestration("inst-no-steal", "TestOrch", "")
+        .await
+        .unwrap();
+
+    // Wait for phase 1 to settle (timer fires, subscription cancelled)
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Now raise the event — it should go to phase 2's subscription, NOT the cancelled one
+    client.raise_event("inst-no-steal", "Signal", "hello").await.unwrap();
+
+    let status = client
+        .wait_for_orchestration("inst-no-steal", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(
+        matches!(status, runtime::OrchestrationStatus::Completed { ref output, .. } if output == "got:hello"),
+        "Expected got:hello, got {:?}",
+        status
+    );
+
+    // Verify the cancelled breadcrumb exists for phase 1
+    let history = store.read("inst-no-steal").await.unwrap();
+    let has_cancel = history
+        .iter()
+        .any(|e| matches!(&e.kind, EventKind::ExternalSubscribedCancelled { reason } if reason == "dropped_future"));
+    assert!(has_cancel, "Missing dropped_future cancellation breadcrumb");
+
+    rt.shutdown(None).await;
+}
+
+/// Regression: two sequential `schedule_wait("X")` + two `raise_event("X")` should
+/// deliver first→first, second→second (positional FIFO matching).
+/// This guards against the deduplication fix accidentally breaking normal ordering.
+#[tokio::test]
+async fn positional_matching_fifo_without_cancellation() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _: String| async move {
+        let d1 = ctx.schedule_wait("Data").await;
+        let d2 = ctx.schedule_wait("Data").await;
+        Ok(format!("{d1},{d2}"))
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
+    let client = Client::new(store.clone());
+
+    client.start_orchestration("inst-fifo", "TestOrch", "").await.unwrap();
+
+    // Give orchestration time to schedule first wait
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Raise first event — orchestration is blocked on first schedule_wait
+    client.raise_event("inst-fifo", "Data", "first").await.unwrap();
+
+    // Give orchestration time to proceed to second schedule_wait
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Raise second event
+    client.raise_event("inst-fifo", "Data", "second").await.unwrap();
+
+    let status = client
+        .wait_for_orchestration("inst-fifo", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(
+        matches!(status, runtime::OrchestrationStatus::Completed { ref output, .. } if output == "first,second"),
+        "FIFO ordering broken, got {:?}",
+        status
+    );
+
+    rt.shutdown(None).await;
+}
+
+/// Regression: external events with the same name+data must NOT be deduplicated.
+/// Pre-fix, if two identical `raise_event("X", "same_data")` calls occurred,
+/// the second was silently dropped. This test ensures both are delivered.
+#[tokio::test]
+async fn duplicate_external_events_not_deduplicated() {
+    let (store, _td) = common::create_sqlite_store_disk().await;
+
+    let orch = |ctx: OrchestrationContext, _: String| async move {
+        let d1 = ctx.schedule_wait("Dup").await;
+        let d2 = ctx.schedule_wait("Dup").await;
+        Ok(format!("{d1},{d2}"))
+    };
+
+    let orchestration_registry = OrchestrationRegistry::builder().register("TestOrch", orch).build();
+    let activity_registry = ActivityRegistry::builder().build();
+
+    let options = runtime::RuntimeOptions {
+        dispatcher_min_poll_interval: Duration::from_millis(10),
+        ..Default::default()
+    };
+
+    let rt =
+        runtime::Runtime::start_with_options(store.clone(), activity_registry, orchestration_registry, options).await;
+    let client = Client::new(store.clone());
+
+    client.start_orchestration("inst-nodup", "TestOrch", "").await.unwrap();
+
+    // Give orchestration time to schedule first wait
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Raise first event — orchestration is blocked on first schedule_wait
+    client.raise_event("inst-nodup", "Dup", "same_payload").await.unwrap();
+
+    // Give orchestration time to proceed to second schedule_wait
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Raise second identical event — must NOT be deduplicated
+    client.raise_event("inst-nodup", "Dup", "same_payload").await.unwrap();
+
+    let status = client
+        .wait_for_orchestration("inst-nodup", Duration::from_secs(5))
+        .await
+        .unwrap();
+    assert!(
+        matches!(status, runtime::OrchestrationStatus::Completed { ref output, .. } if output == "same_payload,same_payload"),
+        "Duplicate events were deduplicated (bug regression), got {:?}",
+        status
+    );
 
     rt.shutdown(None).await;
 }

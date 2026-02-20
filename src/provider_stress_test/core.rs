@@ -190,7 +190,7 @@ pub async fn run_stress_test(
                 Ok(crate::OrchestrationStatus::Completed { .. }) => {
                     *completed_clone.lock().await += 1;
                 }
-                Ok(crate::OrchestrationStatus::Failed { details }) => {
+                Ok(crate::OrchestrationStatus::Failed { details, .. }) => {
                     let category = details.category();
                     tracing::warn!(
                         category = category,

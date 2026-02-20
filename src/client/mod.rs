@@ -157,8 +157,8 @@ const POLL_DELAY_MULTIPLIER: u64 = 2;
 /// // Wait for completion
 /// let result = client.wait_for_orchestration("order-123", std::time::Duration::from_secs(30)).await.unwrap();
 /// match result {
-///     OrchestrationStatus::Completed { output } => println!("Done: {}", output),
-///     OrchestrationStatus::Failed { details } => {
+///     OrchestrationStatus::Completed { output, .. } => println!("Done: {}", output),
+///     OrchestrationStatus::Failed { details, .. } => {
 ///         eprintln!("Failed ({}): {}", details.category(), details.display_message());
 ///     }
 ///     _ => {}
@@ -389,6 +389,85 @@ impl Client {
             .map_err(ClientError::from)
     }
 
+    /// Raise a positional external event with typed data.
+    ///
+    /// Serializes `data` as JSON before sending. Same semantics as [`Self::raise_event`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the provider fails to enqueue the event.
+    pub async fn raise_event_typed<T: serde::Serialize>(
+        &self,
+        instance: impl Into<String>,
+        event_name: impl Into<String>,
+        data: &T,
+    ) -> Result<(), ClientError> {
+        let payload = crate::_typed_codec::Json::encode(data).expect("Serialization should not fail");
+        self.raise_event(instance, event_name, payload).await
+    }
+
+    /// Enqueue a message into a named queue for an orchestration instance.
+    ///
+    /// Queue messages use FIFO mailbox semantics:
+    /// - Matched to [`OrchestrationContext::dequeue_event`] subscriptions in order
+    /// - Stick around until consumed (even if no subscription exists yet)
+    /// - Survive `continue_as_new` boundaries
+    /// - Not affected by subscription cancellation
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the provider fails to enqueue the message.
+    pub async fn enqueue_event(
+        &self,
+        instance: impl Into<String>,
+        queue: impl Into<String>,
+        data: impl Into<String>,
+    ) -> Result<(), ClientError> {
+        let item = WorkItem::QueueMessage {
+            instance: instance.into(),
+            name: queue.into(),
+            data: data.into(),
+        };
+        self.store
+            .enqueue_for_orchestrator(item, None)
+            .await
+            .map_err(ClientError::from)
+    }
+
+    /// Enqueue a typed message into a named queue for an orchestration instance.
+    ///
+    /// Serializes `data` as JSON before enqueuing. Same semantics as [`Self::enqueue_event`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the provider fails to enqueue the message.
+    pub async fn enqueue_event_typed<T: serde::Serialize>(
+        &self,
+        instance: impl Into<String>,
+        queue: impl Into<String>,
+        data: &T,
+    ) -> Result<(), ClientError> {
+        let payload = crate::_typed_codec::Json::encode(data).expect("Serialization should not fail");
+        self.enqueue_event(instance, queue, payload).await
+    }
+
+    /// Raise a persistent external event that uses mailbox semantics.
+    ///
+    /// Prefer [`Self::enqueue_event`] — this is a deprecated alias.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the provider fails to enqueue the event.
+    #[deprecated(note = "Use enqueue_event() instead")]
+    pub async fn raise_event_persistent(
+        &self,
+        instance: impl Into<String>,
+        event_name: impl Into<String>,
+        data: impl Into<String>,
+    ) -> Result<(), ClientError> {
+        self.enqueue_event(instance, event_name, data).await
+    }
+
     /// V2: Raise an external event with topic-based pub/sub matching.
     ///
     /// Same as `raise_event`, but includes a `topic` for pub/sub matching.
@@ -457,7 +536,7 @@ impl Client {
     /// // Wait for cancellation to complete
     /// let status = client.wait_for_orchestration("order-123", std::time::Duration::from_secs(5)).await?;
     /// match status {
-    ///     OrchestrationStatus::Failed { details } if matches!(
+    ///     OrchestrationStatus::Failed { details, .. } if matches!(
     ///         details,
     ///         duroxide::ErrorDetails::Application {
     ///             kind: duroxide::AppErrorKind::Cancelled { .. },
@@ -507,7 +586,7 @@ impl Client {
     ///
     /// * `OrchestrationStatus::NotFound` - Instance doesn't exist
     /// * `OrchestrationStatus::Running` - Instance is still executing
-    /// * `OrchestrationStatus::Completed { output }` - Instance completed successfully
+    /// * `OrchestrationStatus::Completed { output, .. }` - Instance completed successfully
     /// * `OrchestrationStatus::Failed { error }` - Instance failed (includes cancellations)
     ///
     /// # Behavior
@@ -529,9 +608,9 @@ impl Client {
     ///
     /// match status {
     ///     OrchestrationStatus::NotFound => println!("Instance not found"),
-    ///     OrchestrationStatus::Running => println!("Still processing"),
-    ///     OrchestrationStatus::Completed { output } => println!("Done: {}", output),
-    ///     OrchestrationStatus::Failed { details } => eprintln!("Error: {}", details.display_message()),
+    ///     OrchestrationStatus::Running { .. } => println!("Still processing"),
+    ///     OrchestrationStatus::Completed { output, .. } => println!("Done: {}", output),
+    ///     OrchestrationStatus::Failed { details, .. } => eprintln!("Error: {}", details.display_message()),
     /// }
     /// # Ok(())
     /// # }
@@ -542,15 +621,29 @@ impl Client {
     /// Returns `ClientError::Provider` if the provider fails to read the orchestration history.
     pub async fn get_orchestration_status(&self, instance: &str) -> Result<OrchestrationStatus, ClientError> {
         let hist = self.store.read(instance).await.map_err(ClientError::from)?;
+
+        // Query custom status (lightweight, always available)
+        let (custom_status, custom_status_version) = match self.store.get_custom_status(instance, 0).await {
+            Ok(Some((cs, v))) => (cs, v),
+            Ok(None) => (None, 0),
+            Err(_) => (None, 0), // Best-effort: don't fail status query for custom_status errors
+        };
+
         // Find terminal events first
         for e in hist.iter().rev() {
             match &e.kind {
                 EventKind::OrchestrationCompleted { output } => {
-                    return Ok(OrchestrationStatus::Completed { output: output.clone() });
+                    return Ok(OrchestrationStatus::Completed {
+                        output: output.clone(),
+                        custom_status,
+                        custom_status_version,
+                    });
                 }
                 EventKind::OrchestrationFailed { details } => {
                     return Ok(OrchestrationStatus::Failed {
                         details: details.clone(),
+                        custom_status,
+                        custom_status_version,
                     });
                 }
                 _ => {}
@@ -561,7 +654,10 @@ impl Client {
             .iter()
             .any(|e| matches!(&e.kind, EventKind::OrchestrationStarted { .. }))
         {
-            Ok(OrchestrationStatus::Running)
+            Ok(OrchestrationStatus::Running {
+                custom_status,
+                custom_status_version,
+            })
         } else {
             Ok(OrchestrationStatus::NotFound)
         }
@@ -580,8 +676,8 @@ impl Client {
     ///
     /// # Returns
     ///
-    /// * `Ok(OrchestrationStatus::Completed { output })` - Orchestration completed successfully
-    /// * `Ok(OrchestrationStatus::Failed { details })` - Orchestration failed (includes cancellations)
+    /// * `Ok(OrchestrationStatus::Completed { output, .. })` - Orchestration completed successfully
+    /// * `Ok(OrchestrationStatus::Failed { details, .. })` - Orchestration failed (includes cancellations)
     /// * `Err(ClientError::Timeout)` - Timeout elapsed while still Running
     /// * `Err(ClientError::Provider(e))` - Provider/Storage error
     ///
@@ -601,10 +697,10 @@ impl Client {
     ///
     /// // Wait up to 30 seconds
     /// match client.wait_for_orchestration("order-123", std::time::Duration::from_secs(30)).await {
-    ///     Ok(OrchestrationStatus::Completed { output }) => {
+    ///     Ok(OrchestrationStatus::Completed { output, .. }) => {
     ///         println!("Success: {}", output);
     ///     }
-    ///     Ok(OrchestrationStatus::Failed { details }) => {
+    ///     Ok(OrchestrationStatus::Failed { details, .. }) => {
     ///         eprintln!("Failed ({}): {}", details.category(), details.display_message());
     ///     }
     ///     Err(ClientError::Timeout) => {
@@ -654,8 +750,8 @@ impl Client {
         let deadline = std::time::Instant::now() + timeout;
         // quick path
         match self.get_orchestration_status(instance).await {
-            Ok(OrchestrationStatus::Completed { output }) => return Ok(OrchestrationStatus::Completed { output }),
-            Ok(OrchestrationStatus::Failed { details }) => return Ok(OrchestrationStatus::Failed { details }),
+            Ok(s @ OrchestrationStatus::Completed { .. }) => return Ok(s),
+            Ok(s @ OrchestrationStatus::Failed { .. }) => return Ok(s),
             Err(e) => return Err(e),
             _ => {}
         }
@@ -663,8 +759,8 @@ impl Client {
         let mut delay_ms: u64 = INITIAL_POLL_DELAY_MS;
         while std::time::Instant::now() < deadline {
             match self.get_orchestration_status(instance).await {
-                Ok(OrchestrationStatus::Completed { output }) => return Ok(OrchestrationStatus::Completed { output }),
-                Ok(OrchestrationStatus::Failed { details }) => return Ok(OrchestrationStatus::Failed { details }),
+                Ok(s @ OrchestrationStatus::Completed { .. }) => return Ok(s),
+                Ok(s @ OrchestrationStatus::Failed { .. }) => return Ok(s),
                 Err(e) => return Err(e),
                 _ => {
                     tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
@@ -688,15 +784,90 @@ impl Client {
         timeout: std::time::Duration,
     ) -> Result<Result<Out, String>, ClientError> {
         match self.wait_for_orchestration(instance, timeout).await? {
-            OrchestrationStatus::Completed { output } => match Json::decode::<Out>(&output) {
+            OrchestrationStatus::Completed { output, .. } => match Json::decode::<Out>(&output) {
                 Ok(v) => Ok(Ok(v)),
                 Err(e) => Err(ClientError::InvalidInput {
                     message: format!("decode failed: {e}"),
                 }),
             },
-            OrchestrationStatus::Failed { details } => Ok(Err(details.display_message())),
+            OrchestrationStatus::Failed { details, .. } => Ok(Err(details.display_message())),
             _ => unreachable!("wait_for_orchestration returns only terminal or timeout"),
         }
+    }
+
+    /// Wait for custom_status to change, polling the provider at `poll_interval`.
+    ///
+    /// Returns the full `OrchestrationStatus` when:
+    /// - The `custom_status_version` exceeds `last_seen_version`
+    /// - The orchestration reaches a terminal state (Completed/Failed)
+    /// - The timeout elapses (returns `Err(ClientError::Timeout)`)
+    ///
+    /// # Parameters
+    ///
+    /// * `instance` - Instance ID to monitor
+    /// * `last_seen_version` - The version the caller last observed (0 to get any status)
+    /// * `poll_interval` - How often to check the provider
+    /// * `timeout` - Maximum time to wait
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let mut version = 0u64;
+    /// loop {
+    ///     match client.wait_for_status_change("order-123", version, Duration::from_millis(200), Duration::from_secs(30)).await {
+    ///         Ok(OrchestrationStatus::Running { custom_status, custom_status_version }) => {
+    ///             println!("Progress: {:?}", custom_status);
+    ///             version = custom_status_version;
+    ///         }
+    ///         Ok(OrchestrationStatus::Completed { output, .. }) => {
+    ///             println!("Done: {output}");
+    ///             break;
+    ///         }
+    ///         _ => break,
+    ///     }
+    /// }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the provider fails or the instance doesn't exist.
+    pub async fn wait_for_status_change(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+        poll_interval: std::time::Duration,
+        timeout: std::time::Duration,
+    ) -> Result<OrchestrationStatus, ClientError> {
+        let deadline = std::time::Instant::now() + timeout;
+
+        while std::time::Instant::now() < deadline {
+            // Lightweight check: just custom_status + version
+            match self.store.get_custom_status(instance, last_seen_version).await {
+                Ok(Some(_)) => {
+                    // Version changed — return full status
+                    return self.get_orchestration_status(instance).await;
+                }
+                Ok(None) => {
+                    // No change — check if terminal before sleeping
+                    // (get_custom_status returns None if version hasn't changed,
+                    //  but also if the instance doesn't exist or is terminal)
+                }
+                Err(e) => return Err(ClientError::from(e)),
+            }
+
+            // Also check for terminal state (in case orchestration completed
+            // without ever updating custom_status)
+            match self.get_orchestration_status(instance).await? {
+                OrchestrationStatus::Running { .. } | OrchestrationStatus::NotFound => {
+                    // Still running — sleep and retry
+                    let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+                    tokio::time::sleep(poll_interval.min(remaining)).await;
+                }
+                terminal => return Ok(terminal),
+            }
+        }
+
+        Err(ClientError::Timeout)
     }
 
     // ===== Capability Discovery =====

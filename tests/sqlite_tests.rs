@@ -88,6 +88,7 @@ async fn test_sqlite_provider_basic() {
                 input: r#"{"test": true}"#.to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ),
         Event::with_event_id(
@@ -452,6 +453,7 @@ async fn test_sqlite_file_concurrent_access() {
                         input: format!("{{\"id\": {acked_count}}}"),
                         parent_instance: None,
                         parent_id: None,
+                        carry_forward_events: None,
                     },
                 )],
                 vec![],
@@ -558,7 +560,7 @@ async fn timer_recovery_after_crash_before_fire() {
     ));
 
     // Verify the result shows timer fired
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         assert_eq!(output, "Timer fired, then: done");
     }
 
@@ -606,6 +608,7 @@ async fn test_sqlite_provider_transactional() {
                 input: "{}".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ),
         Event::with_event_id(
@@ -761,6 +764,7 @@ async fn test_sqlite_provider_timer_queue() {
                     input: "{}".to_string(),
                     parent_instance: None,
                     parent_id: None,
+                    carry_forward_events: None,
                 },
             )],
             vec![],
@@ -814,6 +818,7 @@ async fn test_execution_status_running() {
                 input: "test".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ),
         Event::with_event_id(
@@ -888,6 +893,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
                 input: "test".to_string(),
                 parent_instance: None,
                 parent_id: None,
+                carry_forward_events: None,
             },
         ),
         Event::with_event_id(
@@ -982,6 +988,7 @@ async fn test_instrumented_provider_semantic_equivalence() {
             input: "test".to_string(),
             parent_instance: None,
             parent_id: None,
+            carry_forward_events: None,
         },
     )];
 

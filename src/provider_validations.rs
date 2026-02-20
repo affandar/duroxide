@@ -226,7 +226,9 @@ pub mod deletion {
 
 #[cfg(feature = "provider-test")]
 pub mod prune {
-    pub use crate::provider_validation::prune::{test_prune_bulk, test_prune_options_combinations, test_prune_safety};
+    pub use crate::provider_validation::prune::{
+        test_prune_bulk, test_prune_bulk_includes_running_instances, test_prune_options_combinations, test_prune_safety,
+    };
 }
 
 #[cfg(feature = "provider-test")]
@@ -275,5 +277,14 @@ pub mod sessions {
         test_session_lock_expires_new_owner_gets_redelivery, test_session_lock_expires_same_worker_reacquires,
         test_session_lock_renewal_extends_past_original_timeout, test_session_takeover_after_lock_expiry,
         test_shared_worker_id_any_caller_can_fetch_owned_session, test_some_session_returns_all_items,
+    };
+}
+
+#[cfg(feature = "provider-test")]
+pub mod custom_status {
+    pub use crate::provider_validation::custom_status::{
+        test_custom_status_clear, test_custom_status_default_on_new_instance, test_custom_status_none_preserves,
+        test_custom_status_nonexistent_instance, test_custom_status_polling_no_change, test_custom_status_set,
+        test_custom_status_version_increments,
     };
 }

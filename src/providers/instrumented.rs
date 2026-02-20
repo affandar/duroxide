@@ -296,4 +296,12 @@ impl Provider for InstrumentedProvider {
     fn as_management_capability(&self) -> Option<&dyn ProviderAdmin> {
         self.inner.as_management_capability()
     }
+
+    async fn get_custom_status(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError> {
+        self.inner.get_custom_status(instance, last_seen_version).await
+    }
 }

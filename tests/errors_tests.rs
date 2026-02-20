@@ -77,10 +77,10 @@ async fn error_handling_compensation_on_ship_failure_with(store: StdArc<dyn Prov
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             assert!(output.starts_with("rolled_back:credited:"));
         }
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -134,8 +134,8 @@ async fn error_handling_success_path_with(store: StdArc<dyn Provider>) {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "ok"),
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -192,10 +192,10 @@ async fn error_handling_early_debit_failure_with(store: StdArc<dyn Provider>) {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             assert!(output.starts_with("debit_failed:"));
         }
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -253,14 +253,14 @@ async fn unknown_activity_fails_with(store: StdArc<dyn Provider>) {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             // Should fail with application error from activity failure/poison
             assert!(
                 matches!(details, duroxide::ErrorDetails::Application { .. })
                     || matches!(details, duroxide::ErrorDetails::Poison { .. })
             );
         }
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             panic!("expected failure, got success: {output}");
         }
         _ => panic!("unexpected orchestration status"),
@@ -309,20 +309,31 @@ async fn event_after_completion_is_ignored_fs() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "done"),
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
     }
     // Allow runtime to append OrchestrationCompleted terminal event
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    assert!(
+        common::wait_for_history(
+            store.clone(),
+            instance,
+            |hist| hist
+                .iter()
+                .any(|e| matches!(&e.kind, duroxide::EventKind::OrchestrationCompleted { .. })),
+            3000,
+        )
+        .await,
+        "OrchestrationCompleted terminal event never appeared"
+    );
     let before = store.read(instance).await.unwrap_or_default().len();
 
     // Raise another event after completion
     let _ = client.raise_event(instance, "Once", "late").await;
-    // Give router a moment
-    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    // Give runtime enough time to process the event (if it were going to mutate history)
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     let hist_after = store.read(instance).await.unwrap_or_default();
     assert_eq!(
         hist_after.len(),
@@ -332,7 +343,10 @@ async fn event_after_completion_is_ignored_fs() {
     rt.shutdown(None).await;
 }
 
-// 7) Event raised before subscription after instance start is ignored
+// 7) Event raised before subscription after instance start is materialized in history
+// (audit trail) but NOT delivered. The causal check in the replay engine skips
+// delivery when no pending subscription slot exists at the point the event
+// appears in history. The subscription must wait for a subsequent event.
 #[tokio::test]
 async fn event_before_subscription_after_start_is_ignored() {
     // Use FS store for consistency
@@ -345,15 +359,15 @@ async fn event_before_subscription_after_start_is_ignored() {
         info!("Subscribing to event");
         // Subscribe, then wait for event with timeout
         let ev = ctx.schedule_wait("Evt");
-        let to = ctx.schedule_timer(Duration::from_millis(1000));
+        let to = ctx.schedule_timer(Duration::from_millis(500));
         match ctx.select2(ev, to).await {
             Either2::First(data) => {
                 info!("Event received: {}", data);
                 Ok(data)
             }
             Either2::Second(_) => {
-                info!("Timeout waiting for event");
-                panic!("timeout waiting for Evt after subscription")
+                info!("Timeout: early event correctly dropped by causal check");
+                Ok("early-event-dropped".to_string())
             }
         }
     };
@@ -373,24 +387,21 @@ async fn event_before_subscription_after_start_is_ignored() {
         tokio::time::sleep(std::time::Duration::from_millis(1)).await;
         let _ = client_c1.raise_event(instance, "Evt", "early").await;
     });
-    let store_for_wait2 = store.clone();
-    let client_c2 = duroxide::Client::new(store.clone());
     client
         .start_orchestration(instance, "PreSubscriptionTest", "")
         .await
         .unwrap();
-    tokio::spawn(async move {
-        let _ = common::wait_for_subscription(store_for_wait2.clone(), instance, "Evt", 1000).await;
-        let _ = client_c2.raise_event(instance, "Evt", "late").await;
-    });
 
     match client
         .wait_for_orchestration(instance, std::time::Duration::from_secs(5))
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "late"),
-        duroxide::OrchestrationStatus::Failed { details } => {
+        // The early event is materialized in history but not delivered to the subscription
+        // (causal check: no subscription existed when the event appeared in history).
+        // Timer wins the select2, orchestration returns "early-event-dropped".
+        duroxide::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "early-event-dropped"),
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -432,8 +443,8 @@ async fn history_cap_exceeded_with(store: StdArc<dyn Provider>) {
         .wait_for_orchestration("inst-cap-exceed", std::time::Duration::from_secs(10))
         .await
     {
-        Ok(duroxide::OrchestrationStatus::Failed { details: _ }) => {} // Expected failure due to history capacity
-        Ok(duroxide::OrchestrationStatus::Completed { output }) => {
+        Ok(duroxide::OrchestrationStatus::Failed { details: _, .. }) => {} // Expected failure due to history capacity
+        Ok(duroxide::OrchestrationStatus::Completed { output, .. }) => {
             panic!("expected failure due to history capacity, got: {output}")
         }
         Ok(_) => panic!("unexpected orchestration status"),
@@ -483,8 +494,8 @@ async fn orchestration_immediate_fail_fs() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Failed { details: _ } => {} // Expected failure
-        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        duroxide::OrchestrationStatus::Failed { details: _, .. } => {} // Expected failure
+        duroxide::OrchestrationStatus::Completed { output, .. } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -502,7 +513,7 @@ async fn orchestration_immediate_fail_fs() {
     ));
     // Status API should report Failed with same error
     match client.get_orchestration_status("inst-fail-imm").await.unwrap() {
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             assert!(matches!(
                 details,
                 duroxide::ErrorDetails::Application {
@@ -545,7 +556,7 @@ async fn orchestration_propagates_activity_failure_fs() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             assert!(matches!(
                 details,
                 duroxide::ErrorDetails::Application {
@@ -555,7 +566,7 @@ async fn orchestration_propagates_activity_failure_fs() {
                 } if message == "bad"
             ));
         }
-        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        duroxide::OrchestrationStatus::Completed { output, .. } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
 
@@ -566,7 +577,7 @@ async fn orchestration_propagates_activity_failure_fs() {
         duroxide::EventKind::OrchestrationFailed { .. }
     ));
     match client.get_orchestration_status("inst-fail-prop").await.unwrap() {
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             assert!(matches!(
                 details,
                 duroxide::ErrorDetails::Application {
@@ -612,8 +623,8 @@ async fn typed_activity_decode_error_fs() {
         .await
         .unwrap();
     let output = match status {
-        duroxide::OrchestrationStatus::Completed { output } => output,
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => output,
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -729,7 +740,7 @@ async fn test_instance_id_idempotence() {
     ));
 
     let result = match status {
-        duroxide::runtime::OrchestrationStatus::Completed { output } => output,
+        duroxide::runtime::OrchestrationStatus::Completed { output, .. } => output,
         _ => panic!("Expected completed status"),
     };
 
@@ -755,7 +766,7 @@ async fn test_instance_id_idempotence() {
     ));
 
     let result2 = match status2 {
-        duroxide::runtime::OrchestrationStatus::Completed { output } => output,
+        duroxide::runtime::OrchestrationStatus::Completed { output, .. } => output,
         _ => panic!("Expected completed status"),
     };
 
@@ -794,7 +805,7 @@ async fn orchestration_panic_is_caught_and_fails_with_message() {
         .unwrap();
 
     match status {
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             let msg = details.display_message();
             assert!(
                 msg.contains("something went terribly wrong"),

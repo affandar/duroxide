@@ -101,11 +101,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .wait_for_orchestration("greeting-1", std::time::Duration::from_secs(5))
         .await
     {
-        Ok(OrchestrationStatus::Completed { output }) => {
+        Ok(OrchestrationStatus::Completed { output, .. }) => {
             println!("\n✅ Orchestration completed successfully!");
             println!("Output: {output}");
         }
-        Ok(OrchestrationStatus::Failed { details }) => {
+        Ok(OrchestrationStatus::Failed { details, .. }) => {
             println!("\n❌ Orchestration failed: {}", details.display_message());
         }
         Ok(_) => {

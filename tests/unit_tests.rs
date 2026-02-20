@@ -58,7 +58,7 @@ async fn deterministic_replay_activity_only() {
         .unwrap();
 
     let output = match status {
-        duroxide::OrchestrationStatus::Completed { output } => output,
+        duroxide::OrchestrationStatus::Completed { output, .. } => output,
         _ => panic!("Expected completed status"),
     };
     assert_eq!(output, "a=3");
@@ -100,8 +100,8 @@ async fn runtime_duplicate_orchestration_deduped_single_execution() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "ok"),
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
@@ -206,12 +206,12 @@ async fn orchestration_status_apis() {
     for _ in 0..10 {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         s1 = client.get_orchestration_status(inst_running).await.unwrap();
-        if matches!(s1, OrchestrationStatus::Running) {
+        if matches!(s1, OrchestrationStatus::Running { .. }) {
             break;
         }
     }
     assert!(
-        matches!(s1, OrchestrationStatus::Running),
+        matches!(s1, OrchestrationStatus::Running { .. }),
         "expected Running, got {s1:?}"
     );
 
@@ -221,15 +221,15 @@ async fn orchestration_status_apis() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "ok"),
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         _ => panic!("unexpected orchestration status"),
     }
     let s2 = client.get_orchestration_status(inst_running).await.unwrap();
     assert!(matches!(s2, OrchestrationStatus::Completed { .. }));
-    if let OrchestrationStatus::Completed { output } = s2 {
+    if let OrchestrationStatus::Completed { output, .. } = s2 {
         assert_eq!(output, "ok");
     }
 
@@ -242,13 +242,13 @@ async fn orchestration_status_apis() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Failed { details: _ } => {} // Expected failure
-        duroxide::OrchestrationStatus::Completed { output } => panic!("expected failure, got: {output}"),
+        duroxide::OrchestrationStatus::Failed { details: _, .. } => {} // Expected failure
+        duroxide::OrchestrationStatus::Completed { output, .. } => panic!("expected failure, got: {output}"),
         _ => panic!("unexpected orchestration status"),
     }
     let s3 = client.get_orchestration_status(inst_fail).await.unwrap();
     assert!(matches!(s3, OrchestrationStatus::Failed { .. }));
-    if let OrchestrationStatus::Failed { details } = s3 {
+    if let OrchestrationStatus::Failed { details, .. } = s3 {
         assert_eq!(details.display_message(), "boom");
     }
 
@@ -394,7 +394,7 @@ async fn orchestration_context_metadata_accessors() {
         .await
         .unwrap()
     {
-        duroxide::OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
+        duroxide::OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "done"),
         other => panic!("Expected Completed, got {other:?}"),
     }
 

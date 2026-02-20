@@ -49,7 +49,9 @@ async fn external_duplicate_workitems_dedup() {
     .await;
     assert!(ok, "timeout waiting for completion");
 
-    // exactly one ExternalEvent in history
+    // Both external events are materialized in history (unconditional materialization).
+    // Only the first is delivered to the subscription (causal check); the second
+    // has no pending subscription slot and is a no-op at replay time.
     let hist = store.read(inst).await.unwrap_or_default();
     let external_events: Vec<&Event> = hist
         .iter()
@@ -57,8 +59,8 @@ async fn external_duplicate_workitems_dedup() {
         .collect();
     assert_eq!(
         external_events.len(),
-        1,
-        "expected 1 ExternalEvent, got {}",
+        2,
+        "expected 2 ExternalEvents (both materialized for audit), got {}",
         external_events.len()
     );
 
@@ -271,12 +273,14 @@ async fn crash_after_dequeue_before_append_completion() {
     )
     .await;
     assert!(ok, "timeout waiting for completion");
+    // Both external events are materialized in history (unconditional materialization).
+    // Only the first is delivered (causal check); the duplicate is a no-op at replay time.
     let hist = store.read(inst).await.unwrap_or_default();
     let evs: Vec<&Event> = hist
         .iter()
         .filter(|e| matches!(&e.kind, EventKind::ExternalEvent { .. }))
         .collect();
-    assert_eq!(evs.len(), 1);
+    assert_eq!(evs.len(), 2);
 
     rt.shutdown(None).await;
 }

@@ -68,8 +68,8 @@ async fn unknown_orchestration_fails_with_poison() {
             .unwrap();
 
         let details = match status {
-            duroxide::OrchestrationStatus::Failed { details } => details,
-            duroxide::OrchestrationStatus::Completed { output } => {
+            duroxide::OrchestrationStatus::Failed { details, .. } => details,
+            duroxide::OrchestrationStatus::Completed { output, .. } => {
                 panic!("expected failure for {instance}, got success: {output}")
             }
             _ => panic!("unexpected orchestration status for {instance}"),
@@ -155,7 +155,7 @@ async fn unknown_activity_fails_with_poison() {
     // Orchestration should fail because the activity eventually poisoned
     // When an activity poisons, the orchestration fails with Poison error details
     match status {
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             assert!(
                 matches!(details, duroxide::ErrorDetails::Poison { .. }),
                 "Expected Poison error from activity poison, got: {details:?}"
@@ -274,7 +274,7 @@ async fn continue_as_new_to_missing_version_fails_with_poison() {
 
     // Should fail with poison error (the v3.0.0 execution poisoned)
     match status {
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             assert!(
                 matches!(details, duroxide::ErrorDetails::Poison { .. }),
                 "Expected Poison error from CAN to missing version, got: {details:?}"

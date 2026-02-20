@@ -59,8 +59,8 @@ async fn activity_tracing_emits_all_levels() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => assert_eq!(output, "ok"),
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "ok"),
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -125,8 +125,8 @@ async fn orchestration_tracing_emits_all_levels() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => assert_eq!(output, "done"),
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Completed { output, .. } => assert_eq!(output, "done"),
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -999,7 +999,7 @@ async fn test_sub_orchestration_metrics() {
         .await
         .unwrap()
     {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert!(output.contains("child:"), "should have sub-orch results");
         }
         other => panic!("unexpected status: {other:?}"),

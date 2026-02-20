@@ -34,8 +34,10 @@ pub async fn wait_for_subscription(store: StdArc<dyn Provider>, instance: &str, 
         store,
         instance,
         |hist| {
-            hist.iter()
-                .any(|e| matches!(&e.kind, EventKind::ExternalSubscribed { name: n } if n == name))
+            hist.iter().any(|e| {
+                matches!(&e.kind, EventKind::ExternalSubscribed { name: n } if n == name)
+                    || matches!(&e.kind, EventKind::QueueSubscribed { name: n } if n == name)
+            })
         },
         timeout_ms,
     )
@@ -150,6 +152,7 @@ pub async fn test_create_execution(
                     input: input.to_string(),
                     parent_instance: parent_instance.map(|s| s.to_string()),
                     parent_id,
+                    carry_forward_events: None,
                 },
             )],
             vec![], // no worker items
@@ -251,6 +254,7 @@ pub async fn seed_instance_with_pinned_version(
             input: "{}".to_string(),
             parent_instance: None,
             parent_id: None,
+            carry_forward_events: None,
         },
     );
     started_event.duroxide_version = version_str;
@@ -277,6 +281,7 @@ pub async fn seed_instance_with_pinned_version(
             orchestration_name: Some(orchestration.to_string()),
             orchestration_version: Some("1.0.0".to_string()),
             pinned_duroxide_version: Some(pinned_version),
+            custom_status: None,
             ..Default::default()
         },
     )

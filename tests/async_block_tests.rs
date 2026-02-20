@@ -95,7 +95,7 @@ async fn async_block_join_with_control_flow() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             assert!(
                 output.contains("A:[step:A1,step:A2]"),
                 "Block A result incorrect: {output}"
@@ -109,7 +109,7 @@ async fn async_block_join_with_control_flow() {
                 "Block C result incorrect: {output}"
             );
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -182,7 +182,7 @@ async fn async_block_join_many() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // All blocks should complete, order preserved (block0, block1, ...)
             for i in 0..5 {
                 let delay = (5 - i) * 5;
@@ -190,7 +190,7 @@ async fn async_block_join_many() {
                 assert!(output.contains(&expected), "Missing block {i} result: {output}");
             }
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -261,12 +261,12 @@ async fn async_block_sequential() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Check the nested processing happened
             assert!(output.starts_with("final:"), "Should have final prefix: {output}");
             assert!(output.contains("processed:"), "Should contain processed: {output}");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -339,7 +339,7 @@ async fn async_block_select_racing() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Fast block should win (index 0)
             assert!(output.starts_with("winner:0,"), "Fast block should win: {output}");
             assert!(
@@ -347,7 +347,7 @@ async fn async_block_select_racing() {
                 "Fast block result incorrect: {output}"
             );
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -412,7 +412,7 @@ async fn async_block_vs_durable_future() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Single future should win (index 0)
             assert!(output.starts_with("winner:0,"), "Single future should win: {output}");
             assert!(
@@ -420,7 +420,7 @@ async fn async_block_vs_durable_future() {
                 "Single future result incorrect: {output}"
             );
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -491,12 +491,12 @@ async fn async_block_select3_with_timers() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Block A (shortest timer) should win
             assert!(output.starts_with("winner:0,"), "Block A should win: {output}");
             assert!(output.contains("A:work:A"), "Block A result incorrect: {output}");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -567,7 +567,7 @@ async fn async_block_nested_join_in_select() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Work block should complete before timeout
             assert!(
                 output.starts_with("winner:0,"),
@@ -577,7 +577,7 @@ async fn async_block_nested_join_in_select() {
             assert!(output.contains("step:2"), "Result should contain step:2: {output}");
             assert!(output.contains("step:3"), "Result should contain step:3: {output}");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -666,7 +666,7 @@ async fn async_block_suborchestration_wins_race() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Block A (with sub-orchestration) should win
             assert!(output.starts_with("winner:0,"), "Sub-orch block should win: {output}");
             assert!(
@@ -685,7 +685,7 @@ async fn async_block_suborchestration_wins_race() {
                 "Child should have completed once"
             );
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -766,7 +766,7 @@ async fn async_block_suborchestration_loses_race() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Block B (fast) should win
             assert!(output.starts_with("winner:1,"), "Fast block should win: {output}");
             assert!(
@@ -774,7 +774,7 @@ async fn async_block_suborchestration_loses_race() {
                 "Fast block result incorrect: {output}"
             );
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -799,11 +799,11 @@ async fn async_block_suborchestration_loses_race() {
         // Failed if manually cancelled. But NOT Completed.
         let child_status = client.get_orchestration_status(&child_id).await.unwrap();
         match child_status {
-            runtime::OrchestrationStatus::Completed { output } => {
+            runtime::OrchestrationStatus::Completed { output, .. } => {
                 panic!("Child should NOT have completed (it lost the race), but got: {output}");
             }
             runtime::OrchestrationStatus::Failed { .. }
-            | runtime::OrchestrationStatus::Running
+            | runtime::OrchestrationStatus::Running { .. }
             | runtime::OrchestrationStatus::NotFound => {
                 // Expected: child was never started, abandoned, or possibly cancelled
             }
@@ -902,7 +902,7 @@ async fn async_block_multiple_suborchestrations_joined() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // All three blocks should complete
             assert!(output.contains("block1:"), "Should have block1: {output}");
             assert!(output.contains("childA:"), "Should have childA result: {output}");
@@ -911,7 +911,7 @@ async fn async_block_multiple_suborchestrations_joined() {
             assert!(output.contains("block3:"), "Should have block3: {output}");
             assert!(output.contains("childC:"), "Should have childC result: {output}");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -998,7 +998,7 @@ async fn async_block_suborchestration_racing_timeout() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Block A (fast sub-orchestration) should win over slow block and timeout
             assert!(output.starts_with("winner:0,"), "Fast block should win: {output}");
             assert!(
@@ -1006,7 +1006,7 @@ async fn async_block_suborchestration_racing_timeout() {
                 "Should have fast child result: {output}"
             );
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),
@@ -1040,11 +1040,11 @@ async fn async_block_suborchestration_racing_timeout() {
         // but we don't queue a provider-level cancellation like we do for activities.
         let status = client.get_orchestration_status(&instance_id).await.unwrap();
         match status {
-            runtime::OrchestrationStatus::Completed { output } => {
+            runtime::OrchestrationStatus::Completed { output, .. } => {
                 panic!("SlowChild should NOT have completed (it lost the race), got: {output}");
             }
             runtime::OrchestrationStatus::Failed { .. }
-            | runtime::OrchestrationStatus::Running
+            | runtime::OrchestrationStatus::Running { .. }
             | runtime::OrchestrationStatus::NotFound => {
                 // Expected: child was never started, abandoned, or possibly cancelled
             }
@@ -1126,7 +1126,7 @@ async fn async_block_nested_suborchestration_chain() {
         .await
         .unwrap()
     {
-        runtime::OrchestrationStatus::Completed { output } => {
+        runtime::OrchestrationStatus::Completed { output, .. } => {
             // Both blocks should complete with nested results
             assert!(output.contains("block1:"), "Should have block1: {output}");
             assert!(
@@ -1139,7 +1139,7 @@ async fn async_block_nested_suborchestration_chain() {
             );
             assert!(output.contains("child:"), "Should have child results: {output}");
         }
-        runtime::OrchestrationStatus::Failed { details } => {
+        runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("orchestration failed: {}", details.display_message())
         }
         other => panic!("unexpected orchestration status: {other:?}"),

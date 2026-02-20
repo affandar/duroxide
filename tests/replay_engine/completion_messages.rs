@@ -184,10 +184,11 @@ fn wrong_execution_filtered() {
     assert!(engine.history_delta().is_empty(), "Wrong execution should be filtered");
 }
 
-/// External event without subscription is filtered.
+/// External event without subscription is materialized unconditionally.
 ///
-/// External events are only accepted if there's a matching ExternalSubscribed event
-/// in history. Unsubscribed events are silently dropped.
+/// All positional external events are materialized into history_delta for audit.
+/// The causal check in the replay loop (execute_orchestration) skips delivery
+/// when no pending subscription slot exists.
 #[test]
 fn external_without_subscription() {
     let history = vec![
@@ -197,9 +198,10 @@ fn external_without_subscription() {
 
     engine.prep_completions(vec![external_raised_msg("UnknownEvent", "data")]);
 
-    assert!(
-        engine.history_delta().is_empty(),
-        "External without subscription should be filtered"
+    assert_eq!(
+        engine.history_delta().len(),
+        1,
+        "External event should be materialized unconditionally (causal check is in replay loop)"
     );
 }
 
@@ -221,4 +223,47 @@ fn multiple_completions_batch() {
     ]);
 
     assert_eq!(engine.history_delta().len(), 2, "Both completions should be added");
+}
+
+/// Duplicate external events in the same batch are NOT deduplicated.
+///
+/// Multiple ExternalRaised with the same name+data are separate arrivals by design.
+/// Each one is materialized independently into history_delta.
+#[test]
+fn duplicate_external_events_in_batch_are_kept() {
+    let history = vec![started_event(1), external_subscribed(2, "Evt")];
+    let mut engine = create_engine(history);
+
+    engine.prep_completions(vec![
+        external_raised_msg("Evt", "same-data"),
+        external_raised_msg("Evt", "same-data"),
+    ]);
+
+    assert_eq!(
+        engine.history_delta().len(),
+        2,
+        "Both external events should be materialized (duplicates are valid separate arrivals)"
+    );
+}
+
+/// Duplicate external event already in baseline history is NOT deduplicated.
+///
+/// An ExternalRaised with the same name+data as an event already in baseline_history
+/// is a new arrival and must be materialized.
+#[test]
+fn duplicate_external_event_in_history_is_kept() {
+    let history = vec![
+        started_event(1),
+        external_subscribed(2, "Evt"),
+        external_event(3, "Evt", "same-data"), // already in history
+    ];
+    let mut engine = create_engine(history);
+
+    engine.prep_completions(vec![external_raised_msg("Evt", "same-data")]);
+
+    assert_eq!(
+        engine.history_delta().len(),
+        1,
+        "External event should be materialized even if same name+data exists in history"
+    );
 }

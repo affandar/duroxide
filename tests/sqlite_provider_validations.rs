@@ -74,7 +74,10 @@ mod tests {
             worker_attempt_count_increments_on_lock_expiry, worker_attempt_count_starts_at_one,
         },
         // Prune tests
-        prune::{test_prune_bulk, test_prune_options_combinations, test_prune_safety},
+        prune::{
+            test_prune_bulk, test_prune_bulk_includes_running_instances, test_prune_options_combinations,
+            test_prune_safety,
+        },
         test_abandon_releases_lock_immediately,
         test_abandon_work_item_releases_lock,
         test_abandon_work_item_with_delay,
@@ -737,6 +740,11 @@ mod tests {
         test_prune_bulk(&SqliteTestFactory).await;
     }
 
+    #[tokio::test]
+    async fn test_sqlite_prune_bulk_includes_running_instances() {
+        test_prune_bulk_includes_running_instances(&SqliteTestFactory).await;
+    }
+
     // Bulk deletion tests
     #[tokio::test]
     async fn test_sqlite_delete_instance_bulk_filter_combinations() {
@@ -1036,5 +1044,47 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_session_lock_renewal_extends_past_original_timeout() {
         test_session_lock_renewal_extends_past_original_timeout(&SqliteTestFactory).await;
+    }
+
+    // Custom status tests
+    use duroxide::provider_validations::custom_status::{
+        test_custom_status_clear, test_custom_status_default_on_new_instance, test_custom_status_none_preserves,
+        test_custom_status_nonexistent_instance, test_custom_status_polling_no_change, test_custom_status_set,
+        test_custom_status_version_increments,
+    };
+
+    #[tokio::test]
+    async fn test_sqlite_custom_status_set() {
+        test_custom_status_set(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_custom_status_clear() {
+        test_custom_status_clear(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_custom_status_none_preserves() {
+        test_custom_status_none_preserves(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_custom_status_version_increments() {
+        test_custom_status_version_increments(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_custom_status_polling_no_change() {
+        test_custom_status_polling_no_change(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_custom_status_nonexistent_instance() {
+        test_custom_status_nonexistent_instance(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_custom_status_default_on_new_instance() {
+        test_custom_status_default_on_new_instance(&SqliteTestFactory).await;
     }
 }

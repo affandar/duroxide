@@ -53,7 +53,7 @@ These patterns are enabled by deterministic replay, correlation IDs, durable tim
 - Providers enforce a history cap (default 1024; tests use a smaller cap). If an append would exceed the cap, they return an error; the runtime fails the run to preserve determinism (no truncation).
 
 ### Key types
-- `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_activity_on_session`, `schedule_timer`, `schedule_wait`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `trace_*`, `continue_as_new`.
+- `OrchestrationContext`: schedules work (`schedule_activity`, `schedule_activity_on_session`, `schedule_activity_with_retry`, `schedule_activity_with_retry_on_session`, `schedule_timer`, `schedule_wait`, `dequeue_event`, `schedule_sub_orchestration`, `schedule_orchestration`) and exposes deterministic `select2/select/join`, `set_custom_status`, `trace_*`, `continue_as_new`.
 - `Event`/`Action`: immutable history entries and host-side actions, including `ContinueAsNew`.
 - `Provider`: persistence + queues abstraction with atomic operations and lock renewal (`SqliteProvider` with in-memory and file-based modes).
 - `RuntimeOptions`: configure concurrency, lock timeouts, and lock renewal buffer for long-running activities.

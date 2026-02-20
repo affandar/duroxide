@@ -52,11 +52,11 @@ async fn continue_as_new_chain_5_iterations() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "completed at 4");
             tracing::info!("✓ Continue-as-new chain completed successfully");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("Chain failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),
@@ -157,11 +157,11 @@ async fn continue_as_new_chain_with_activities() {
         .unwrap();
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             assert_eq!(output, "completed at 4");
             tracing::info!("✓ Continue-as-new chain with activities completed");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("Chain failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),
@@ -236,10 +236,10 @@ async fn concurrent_continue_as_new_chains() {
             .unwrap();
 
         match status {
-            OrchestrationStatus::Completed { output } => {
+            OrchestrationStatus::Completed { output, .. } => {
                 assert_eq!(output, "completed at 4");
             }
-            OrchestrationStatus::Failed { details } => {
+            OrchestrationStatus::Failed { details, .. } => {
                 panic!("Chain {} failed: {}", instance, details.display_message());
             }
             _ => panic!("Unexpected status for {instance}: {status:?}"),
@@ -525,11 +525,11 @@ async fn instance_actor_pattern_stress_test() {
             .unwrap();
 
         match status {
-            OrchestrationStatus::Completed { output } => {
+            OrchestrationStatus::Completed { output, .. } => {
                 assert!(output.contains("completed after 5 executions"));
                 tracing::info!("✓ Instance actor {} completed after 5 executions", instance_id);
             }
-            OrchestrationStatus::Failed { details } => {
+            OrchestrationStatus::Failed { details, .. } => {
                 eprintln!(
                     "\n❌ Instance actor {} failed: {}\n",
                     instance_id,
@@ -723,7 +723,7 @@ async fn timer_fires_at_correct_time_regression() {
     rt.shutdown(None).await;
 
     match status {
-        OrchestrationStatus::Completed { output } => {
+        OrchestrationStatus::Completed { output, .. } => {
             // The fast activity (100ms) should beat the 1-second timer
             assert_ne!(
                 output, "timer_won",
@@ -733,7 +733,7 @@ async fn timer_fires_at_correct_time_regression() {
             assert_eq!(output, "activity_done", "Activity should have won the race");
             tracing::info!("✓ Timer fired at correct time, activity won the race as expected");
         }
-        OrchestrationStatus::Failed { details } => {
+        OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),

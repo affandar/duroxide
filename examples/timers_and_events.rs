@@ -202,11 +202,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
         .map_err(|e| format!("Wait error: {e:?}"))?
     {
-        duroxide::OrchestrationStatus::Completed { output } => {
+        duroxide::OrchestrationStatus::Completed { output, .. } => {
             println!("✅ Approval workflow completed!");
             println!("Result: {output}");
         }
-        duroxide::OrchestrationStatus::Failed { details } => {
+        duroxide::OrchestrationStatus::Failed { details, .. } => {
             println!("❌ Workflow failed: {}", details.display_message());
         }
         _ => {

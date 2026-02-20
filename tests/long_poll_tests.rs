@@ -177,6 +177,14 @@ impl Provider for LongPollingSqliteProvider {
     async fn read_with_execution(&self, instance: &str, execution_id: u64) -> Result<Vec<Event>, ProviderError> {
         self.inner.read_with_execution(instance, execution_id).await
     }
+
+    async fn get_custom_status(
+        &self,
+        instance: &str,
+        last_seen_version: u64,
+    ) -> Result<Option<(Option<String>, u64)>, ProviderError> {
+        self.inner.get_custom_status(instance, last_seen_version).await
+    }
 }
 
 // --- Tests ---

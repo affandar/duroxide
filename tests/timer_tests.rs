@@ -72,7 +72,7 @@ async fn single_timer_fires() {
         status,
         duroxide::runtime::OrchestrationStatus::Completed { .. }
     ));
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         assert_eq!(output, "done");
     }
 
@@ -156,7 +156,7 @@ async fn timer_with_activity() {
         duroxide::runtime::OrchestrationStatus::Completed { .. }
     ));
 
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         assert!(output.contains("timer:"));
         assert!(output.contains("activity: processed: input"));
     }
@@ -253,7 +253,7 @@ async fn timer_recovery_after_crash_before_fire() {
     ));
 
     // Verify the result shows timer fired
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         assert_eq!(output, "Timer fired, then: done");
     }
 
@@ -328,7 +328,7 @@ async fn timer_recovery_after_crash_after_fire() {
         duroxide::runtime::OrchestrationStatus::Completed { .. }
     ));
 
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         assert_eq!(output, "Timer fired, then: done");
     }
 
@@ -365,7 +365,7 @@ async fn zero_duration_timer() {
         duroxide::runtime::OrchestrationStatus::Completed { .. }
     ));
 
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         assert_eq!(output, "zero-timer-fired");
     }
 
@@ -402,7 +402,7 @@ async fn timer_cancellation() {
         duroxide::runtime::OrchestrationStatus::Completed { .. }
     ));
 
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         assert_eq!(output, "timer-completed");
     }
 
@@ -491,7 +491,7 @@ async fn multiple_timers_recovery_after_crash() {
     ));
 
     // Verify the result
-    if let duroxide::runtime::OrchestrationStatus::Completed { output } = status {
+    if let duroxide::runtime::OrchestrationStatus::Completed { output, .. } = status {
         assert_eq!(output, "all-timers-fired");
     }
 
@@ -586,7 +586,7 @@ async fn timer_fires_at_correct_time_after_previous_timer() {
     rt.shutdown(None).await;
 
     match status {
-        duroxide::runtime::OrchestrationStatus::Completed { output } => {
+        duroxide::runtime::OrchestrationStatus::Completed { output, .. } => {
             assert_ne!(
                 output, "timer_won",
                 "Timer fired early! The 1-second timer should not beat a 100ms activity. \
@@ -594,7 +594,7 @@ async fn timer_fires_at_correct_time_after_previous_timer() {
             );
             assert_eq!(output, "activity_done", "Activity should have won the race");
         }
-        duroxide::runtime::OrchestrationStatus::Failed { details } => {
+        duroxide::runtime::OrchestrationStatus::Failed { details, .. } => {
             panic!("Orchestration failed: {}", details.display_message());
         }
         _ => panic!("Unexpected status: {status:?}"),
