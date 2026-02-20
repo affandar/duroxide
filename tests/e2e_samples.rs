@@ -1831,7 +1831,7 @@ async fn sample_config_hot_reload_persistent_events_fs() {
 
             // ── Mark cycle boundary, then simulate work ──
             ctx.schedule_timer(Duration::from_millis(100)).await;
-            let _ = ctx.schedule_activity("ApplyConfig", &format!("cycle_{cycle}")).await?;
+            let _ = ctx.schedule_activity("ApplyConfig", format!("cycle_{cycle}")).await?;
             log.push(format!("cycle:{cycle}"));
         }
 
@@ -1899,19 +1899,19 @@ async fn sample_config_hot_reload_persistent_events_fs() {
             let pos_v1 = entries
                 .iter()
                 .position(|e| *e == "applied:v1")
-                .expect(&format!("v1 missing from output: {output}"));
+                .unwrap_or_else(|| panic!("v1 missing from output: {output}"));
             let pos_v2 = entries
                 .iter()
                 .position(|e| *e == "applied:v2")
-                .expect(&format!("v2 missing from output: {output}"));
+                .unwrap_or_else(|| panic!("v2 missing from output: {output}"));
             let pos_v3 = entries
                 .iter()
                 .position(|e| *e == "applied:v3")
-                .expect(&format!("v3 missing from output: {output}"));
+                .unwrap_or_else(|| panic!("v3 missing from output: {output}"));
             let pos_cycle0 = entries
                 .iter()
                 .position(|e| *e == "cycle:0")
-                .expect(&format!("cycle:0 missing from output: {output}"));
+                .unwrap_or_else(|| panic!("cycle:0 missing from output: {output}"));
 
             // v1 and v2 were buffered before start → must be drained before cycle:0
             assert!(

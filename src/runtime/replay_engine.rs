@@ -935,11 +935,11 @@ impl ReplayEngine {
             .chain(self.history_delta.iter())
             .find(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
 
-        if let Some(e) = cancel_event {
-            if let EventKind::OrchestrationCancelRequested { reason } = &e.kind {
-                self.custom_status = ctx.custom_status_update();
-                return TurnResult::Cancelled(reason.clone());
-            }
+        if let Some(EventKind::OrchestrationCancelRequested { reason }) =
+            cancel_event.map(|e| &e.kind)
+        {
+            self.custom_status = ctx.custom_status_update();
+            return TurnResult::Cancelled(reason.clone());
         }
 
         for decision in &self.pending_actions {
@@ -1451,10 +1451,10 @@ impl ReplayEngine {
         // and the history breadcrumb ensures CAN carry-forward correctly excludes them.
         let mut already_cancelled_persistent: HashSet<u64> = HashSet::new();
         for e in self.baseline_history.iter().chain(self.history_delta.iter()) {
-            if let EventKind::QueueSubscriptionCancelled { .. } = &e.kind {
-                if let Some(src) = e.source_event_id {
-                    already_cancelled_persistent.insert(src);
-                }
+            if let (EventKind::QueueSubscriptionCancelled { .. }, Some(src)) =
+                (&e.kind, e.source_event_id)
+            {
+                already_cancelled_persistent.insert(src);
             }
         }
         let cancelled_queue_waits = ctx.get_cancelled_queue_ids();

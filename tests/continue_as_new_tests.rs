@@ -396,7 +396,7 @@ async fn event_drop_then_retry_after_subscribe() {
         .filter(|ev| matches!(&ev.kind, EventKind::ExternalEvent { name, .. } if name == "Data"))
         .collect();
     assert!(
-        events.len() >= 1,
+        !events.is_empty(),
         "early event should be materialized in history (audit trail)"
     );
 

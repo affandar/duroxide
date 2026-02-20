@@ -5,6 +5,50 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.19] - 2026-02-20
+
+**Release:** <https://crates.io/crates/duroxide/0.1.19>
+
+**Proposal:** [Custom Status Progress](https://github.com/affandar/duroxide/blob/main/docs/proposals/custom-status-progress.md)
+**Proposal:** [External Event Semantics](https://github.com/affandar/duroxide/blob/main/docs/proposals/external-event-semantics.md)
+**Proposal:** [Persistent Event Queuing](https://github.com/affandar/duroxide/blob/main/docs/proposals/persistent-event-queuing.md)
+
+### Added
+
+- **Event Queue API** — Persistent FIFO event queues that survive `continue_as_new`
+  - `ctx.dequeue_event(queue)` and `ctx.dequeue_event_typed::<T>(queue)` for orchestrations
+  - `client.enqueue_event(instance, queue, data)` and `client.enqueue_event_typed::<T>()` for clients
+  - FIFO ordering with buffering — messages can arrive before orchestration subscribes
+  - Queue messages carry forward across continue-as-new boundaries
+
+- **Custom Status** — Orchestration progress reporting visible to external clients
+  - `ctx.set_custom_status(json)` publishes structured progress from orchestrations
+  - `client.wait_for_status_change(instance, version, poll, timeout)` for efficient polling
+  - Status persists across continue-as-new boundaries
+  - New Provider trait methods: `set_custom_status()`, `get_custom_status()`
+  - Schema migration `20240108000000_add_custom_status.sql`
+
+- **Retry on Session** — Combine retry policies with session affinity (closes #56)
+  - `ctx.schedule_activity_with_retry_on_session(name, input, policy, session_id)`
+  - `ctx.schedule_activity_with_retry_on_session_typed::<In, Out>()`
+  - All retry attempts pinned to the same worker session
+
+- **Typed event helpers** — `client.raise_event_typed::<T>()` and `client.enqueue_event_typed::<T>()`
+
+- **Provider validation** — `test_prune_bulk_includes_running_instances` catches providers that
+  exclude Running instances from bulk prune (closes #50)
+
+- **Scenario test** — Copilot Chat pattern: multi-turn chat using dequeue_event + set_custom_status + CAN
+
+### Changed
+
+- Renamed persistent event internals: `ExternalRaisedPersistent` → `QueueMessage`, `ExternalSubscribedPersistent` → `QueueSubscribed`
+
+### Deprecated
+
+- `client.raise_event_persistent()` — use `client.enqueue_event()` instead
+- `ctx.schedule_wait_persistent()` — use `ctx.dequeue_event()` instead
+
 ## [0.1.18] - 2026-02-16
 
 **Release:** <https://crates.io/crates/duroxide/0.1.18>
