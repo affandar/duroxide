@@ -4,8 +4,11 @@
 //! - Runtime-side compatibility checking (abandon incompatible, process compatible)
 //! - Poison message handling for incompatible items
 //! - Multi-runtime rolling deployment routing
-//! - Version range routing and drain procedures
+//! - Version ranges routing and drain procedures
 //! - Observability (log assertions)
+#![allow(clippy::unwrap_used)]
+#![allow(clippy::clone_on_ref_ptr)]
+#![allow(clippy::expect_used)]
 
 use duroxide::providers::{Provider, SemverRange, WorkItem};
 use duroxide::runtime::registry::ActivityRegistry;

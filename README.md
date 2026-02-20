@@ -8,8 +8,8 @@
 
 A lightweight and embeddable durable execution runtime for Rust. Inspired by the [Durable Task Framework](https://github.com/Azure/durabletask) and [Temporal](https://temporal.io/).
 
-> **[Latest Release: v0.1.18](https://crates.io/crates/duroxide/0.1.18)** — Activity session affinity: route activities to the same worker for in-memory state reuse.
-> See [CHANGELOG.md](CHANGELOG.md#0118---2026-02-16) for release notes. [Proposal](docs/proposals-impl/activity-implicit-sessions-v2.md)
+> **[Latest Release: v0.1.19](https://crates.io/crates/duroxide/0.1.19)** — Event queues, custom status, retry-on-session, and prune validation.
+> See [CHANGELOG.md](CHANGELOG.md#0119---2026-02-20) for release notes. [Proposals](docs/proposals/custom-status-progress.md)
 
 ### What you can build with this
 - Function chaining: model a multi-step process as sequential awaits where each step depends on prior results.

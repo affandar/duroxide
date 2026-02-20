@@ -502,8 +502,9 @@ impl Runtime {
         // Enforce custom status size limit.
         // If the user set a status that exceeds the limit, fail the orchestration
         // as an application error before committing the ack.
-        if let Some(crate::providers::CustomStatusUpdate::Set(ref s)) = metadata.custom_status {
-            if s.len() > crate::runtime::limits::MAX_CUSTOM_STATUS_BYTES {
+        if let Some(crate::providers::CustomStatusUpdate::Set(ref s)) = metadata.custom_status
+            && s.len() > crate::runtime::limits::MAX_CUSTOM_STATUS_BYTES
+        {
                 tracing::error!(
                     target: "duroxide::runtime",
                     instance_id = %instance,
@@ -540,7 +541,6 @@ impl Runtime {
                 // Drop any worker/orchestrator items — the orchestration is dead
                 worker_items.clear();
                 orchestrator_items.clear();
-            }
         }
 
         // Calculate metrics
