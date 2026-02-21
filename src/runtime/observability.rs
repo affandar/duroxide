@@ -680,7 +680,7 @@ impl ObservabilityHandle {
     pub fn init(config: &ObservabilityConfig) -> Result<Self, String> {
         // Initialize logging first, but tolerate failures (e.g., global subscriber already set)
         if let Err(_err) = init_logging(config) {
-            eprintln!("duroxide: logging already initialized (this is normal if running multiple runtimes or tests)");
+            // Silently ignore — this happens when multiple runtimes share a process
         }
 
         // Always create metrics provider (facade is zero-cost if no recorder installed)
