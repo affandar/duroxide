@@ -95,6 +95,7 @@ pub(crate) async fn create_instance(provider: &dyn crate::providers::Provider, i
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![],
@@ -153,6 +154,16 @@ pub trait ProviderFactory: Sync + Send {
     /// Default lock timeout to use in tests
     fn lock_timeout(&self) -> Duration {
         Duration::from_secs(5)
+    }
+
+    /// Threshold for short polling tests — how fast a non-long-polling provider
+    /// should return when no work is available.
+    ///
+    /// Default is 100ms, which works for local/in-process providers like SQLite.
+    /// Remote-database providers (e.g., PostgreSQL) should override this with a
+    /// higher value (e.g., 500ms) to account for network round-trip latency.
+    fn short_poll_threshold(&self) -> Duration {
+        Duration::from_millis(100)
     }
 
     /// Corrupt an instance's history so it cannot be deserialized.

@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.20] - 2026-02-21
+
+**Release:** <https://crates.io/crates/duroxide/0.1.20>
+
+### Changed (Breaking for Provider Implementors)
+
+- **Custom status as history events** — `set_custom_status()` and `reset_custom_status()` now emit
+  `CustomStatusUpdated` history events instead of writing to `ExecutionMetadata.custom_status`.
+  Custom status is now fully durable, replayable, and deterministic across turns.
+  - Removed `CustomStatusUpdate` enum from providers
+  - Removed `ExecutionMetadata.custom_status` field
+  - Provider `ack_orchestration_item()` must now scan `history_delta` for the last `CustomStatusUpdated`
+    event and apply it to the instances table (see provider-implementation-guide.md)
+  - `initial_custom_status` field added to `OrchestrationStarted` event and `ContinueAsNew` work item
+    for carry-forward across continue-as-new boundaries
+
+### Added
+
+- **`get_custom_status()` on OrchestrationContext** — Read the current custom status value,
+  reflecting all `set_custom_status` / `reset_custom_status` calls across turns and CAN boundaries
+- **`short_poll_threshold()` on ProviderFactory** — Configurable timing for short polling
+  validation tests; remote-database providers can override with higher values (closes #51)
+- **`test_orphan_activity_after_instance_force_deletion`** — Provider validation test verifying
+  graceful handling of activities orphaned by instance force-deletion (closes #37)
+
+### Fixed
+
+- `test_cancelling_nonexistent_activities_is_idempotent` now uses `execution_id: 1` instead of `99`
+  to correctly validate same-execution cancellation semantics (closes #40)
+- Removed dead `ActivityContext::new` constructor (unused, runtime uses `new_with_cancellation`)
+- Removed unused `clippy::clone_on_ref_ptr` suppression from observability.rs (closes #48)
+
 ## [0.1.19] - 2026-02-20
 
 **Release:** <https://crates.io/crates/duroxide/0.1.19>

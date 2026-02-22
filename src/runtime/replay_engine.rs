@@ -59,10 +59,6 @@ pub struct ReplayEngine {
     /// Events beyond this index in baseline_history are NEW this turn (not replay).
     /// Used to correctly track is_replaying state.
     persisted_history_len: usize,
-
-    /// Custom status update extracted from OrchestrationContext after execution.
-    /// Plumbed into ExecutionMetadata at ack time.
-    custom_status: Option<crate::providers::CustomStatusUpdate>,
 }
 
 impl ReplayEngine {
@@ -82,7 +78,6 @@ impl ReplayEngine {
             next_event_id,
             abort_error: None,
             persisted_history_len: persisted_len,
-            custom_status: None,
         }
     }
 
@@ -570,6 +565,20 @@ impl ReplayEngine {
             ctx.set_is_replaying(false);
         }
 
+        // Pre-initialize accumulated_custom_status from OrchestrationStarted before any polling.
+        // This is needed because the first poll may happen before apply_history_event processes
+        // the OrchestrationStarted event (the loop polls before applying at each iteration).
+        if let Some(EventKind::OrchestrationStarted {
+            initial_custom_status: Some(status),
+            ..
+        }) = working_history.first().map(|e| &e.kind)
+        {
+            ctx.inner
+                .lock()
+                .expect("Mutex should not be poisoned")
+                .accumulated_custom_status = Some(status.clone());
+        }
+
         for (event_index, event) in working_history.iter().enumerate() {
             if event_index >= replay_boundary {
                 ctx.set_is_replaying(false);
@@ -661,7 +670,37 @@ impl ReplayEngine {
         must_poll: &mut bool,
     ) -> Result<(), TurnResult> {
         match &event.kind {
+            EventKind::OrchestrationStarted {
+                initial_custom_status: Some(status),
+                ..
+            } => {
+                ctx.inner
+                    .lock()
+                    .expect("Mutex should not be poisoned")
+                    .accumulated_custom_status = Some(status.clone());
+            }
             EventKind::OrchestrationStarted { .. } => {}
+            EventKind::CustomStatusUpdated { status } => {
+                ctx.inner
+                    .lock()
+                    .expect("Mutex should not be poisoned")
+                    .accumulated_custom_status = status.clone();
+
+                // Consume the corresponding UpdateCustomStatus action from emitted_actions.
+                // During replay the orchestration re-executes set_custom_status/reset_custom_status
+                // which emits an UpdateCustomStatus action. We must pop it so subsequent schedule
+                // events match correctly.
+                if let Some((_, action)) = emitted_actions.pop_front()
+                    && !action_matches_event_kind(&action, &event.kind)
+                {
+                    return Err(TurnResult::Failed(nondeterminism_error(&format!(
+                        "custom status mismatch: action={:?} vs event={:?}",
+                        action, event.kind
+                    ))));
+                }
+                // If no action was emitted (e.g., first execution seeded initial_custom_status),
+                // that is fine — the event came from OrchestrationStarted carry-forward.
+            }
             EventKind::ActivityScheduled { name, input: inp, .. } => {
                 self.match_and_bind_schedule(
                     ctx,
@@ -935,16 +974,12 @@ impl ReplayEngine {
             .chain(self.history_delta.iter())
             .find(|e| matches!(&e.kind, EventKind::OrchestrationCancelRequested { .. }));
 
-        if let Some(EventKind::OrchestrationCancelRequested { reason }) =
-            cancel_event.map(|e| &e.kind)
-        {
-            self.custom_status = ctx.custom_status_update();
+        if let Some(EventKind::OrchestrationCancelRequested { reason }) = cancel_event.map(|e| &e.kind) {
             return TurnResult::Cancelled(reason.clone());
         }
 
         for decision in &self.pending_actions {
             if let crate::Action::ContinueAsNew { input, version } = decision {
-                self.custom_status = ctx.custom_status_update();
                 return TurnResult::ContinueAsNew {
                     input: input.clone(),
                     version: version.clone(),
@@ -956,9 +991,6 @@ impl ReplayEngine {
             if let Err(r) = self.collect_cancelled_from_context(ctx) {
                 return r;
             }
-
-            // Extract custom status update from context before it's consumed
-            self.custom_status = ctx.custom_status_update();
 
             return match output {
                 Ok(result) => TurnResult::Completed(result),
@@ -973,9 +1005,6 @@ impl ReplayEngine {
         if let Err(r) = self.collect_cancelled_from_context(ctx) {
             return r;
         }
-
-        // Extract custom status update from context before it's consumed
-        self.custom_status = ctx.custom_status_update();
 
         TurnResult::Continue
     }
@@ -1451,9 +1480,7 @@ impl ReplayEngine {
         // and the history breadcrumb ensures CAN carry-forward correctly excludes them.
         let mut already_cancelled_persistent: HashSet<u64> = HashSet::new();
         for e in self.baseline_history.iter().chain(self.history_delta.iter()) {
-            if let (EventKind::QueueSubscriptionCancelled { .. }, Some(src)) =
-                (&e.kind, e.source_event_id)
-            {
+            if let (EventKind::QueueSubscriptionCancelled { .. }, Some(src)) = (&e.kind, e.source_event_id) {
                 already_cancelled_persistent.insert(src);
             }
         }
@@ -1540,11 +1567,6 @@ impl ReplayEngine {
     /// Check if this run made any progress (added history)
     pub fn made_progress(&self) -> bool {
         !self.history_delta.is_empty()
-    }
-
-    /// Returns the custom status update requested by the orchestration during this turn, if any.
-    pub fn custom_status(&self) -> Option<crate::providers::CustomStatusUpdate> {
-        self.custom_status.clone()
     }
 
     /// Get the final history after this run
@@ -1651,6 +1673,8 @@ fn action_to_event(action: &Action, instance: &str, execution_id: u64, event_id:
         Action::ContinueAsNew { .. } => {
             return None;
         }
+        // UpdateCustomStatus becomes a CustomStatusUpdated history event
+        Action::UpdateCustomStatus { status } => EventKind::CustomStatusUpdated { status: status.clone() },
     };
 
     Some(Event::with_event_id(event_id, instance, execution_id, None, kind))
@@ -1727,6 +1751,8 @@ fn update_action_event_id(action: Action, event_id: u64) -> Action {
         },
         // ContinueAsNew doesn't have scheduling_event_id
         Action::ContinueAsNew { .. } => action,
+        // UpdateCustomStatus doesn't have scheduling_event_id
+        Action::UpdateCustomStatus { .. } => action,
     }
 }
 
@@ -1793,6 +1819,9 @@ fn action_matches_event_kind(action: &Action, event_kind: &EventKind) -> bool {
             },
         ) => name == en && instance == ei && input == inp,
 
+        // UpdateCustomStatus matches CustomStatusUpdated by kind only (value may differ across code versions)
+        (Action::UpdateCustomStatus { .. }, EventKind::CustomStatusUpdated { .. }) => true,
+
         _ => false,
     }
 }
@@ -1819,6 +1848,7 @@ mod tests {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
         );

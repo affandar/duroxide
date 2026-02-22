@@ -54,6 +54,7 @@ pub async fn test_fetch_returns_running_state_for_active_orchestration<F: Provid
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![activity_item],
@@ -131,6 +132,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_completed<F: P
                         parent_instance: None,
                         parent_id: None,
                         carry_forward_events: None,
+                        initial_custom_status: None,
                     },
                 ),
                 Event::with_event_id(
@@ -217,6 +219,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_failed<F: Prov
                         parent_instance: None,
                         parent_id: None,
                         carry_forward_events: None,
+                        initial_custom_status: None,
                     },
                 ),
                 Event::with_event_id(
@@ -308,6 +311,7 @@ pub async fn test_fetch_returns_terminal_state_when_orchestration_continued_as_n
                         parent_instance: None,
                         parent_id: None,
                         carry_forward_events: None,
+                        initial_custom_status: None,
                     },
                 ),
                 Event::with_event_id(
@@ -427,6 +431,7 @@ pub async fn test_renew_returns_running_when_orchestration_active<F: ProviderFac
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![activity_item],
@@ -501,6 +506,7 @@ pub async fn test_renew_returns_terminal_when_orchestration_completed<F: Provide
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![activity_item],
@@ -738,6 +744,7 @@ pub async fn test_cancelled_activities_deleted_from_worker_queue<F: ProviderFact
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![activity1, activity2, activity3],
@@ -941,7 +948,7 @@ pub async fn test_cancelling_nonexistent_activities_is_idempotent<F: ProviderFac
         },
         ScheduledActivityIdentifier {
             instance: "inst-cancel-idempotent".to_string(),
-            execution_id: 99, // Non-existent execution
+            execution_id: 1, // Same execution, non-existent activity
             activity_id: 1,
         },
     ];
@@ -962,6 +969,7 @@ pub async fn test_cancelling_nonexistent_activities_is_idempotent<F: ProviderFac
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![],
@@ -1031,6 +1039,7 @@ pub async fn test_batch_cancellation_deletes_multiple_activities<F: ProviderFact
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             activities,
@@ -1171,6 +1180,7 @@ pub async fn test_same_activity_in_worker_items_and_cancelled_is_noop<F: Provide
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![scheduled_activity, normal_activity], // Both activities scheduled
@@ -1213,4 +1223,116 @@ pub async fn test_same_activity_in_worker_items_and_cancelled_is_noop<F: Provide
     );
 
     tracing::info!("✓ Test passed: same activity in worker_items and cancelled_activities is no-op");
+}
+
+/// Test: Orphan Activity After Instance Force-Deletion
+///
+/// When an instance is force-deleted while activities are sitting in the worker queue,
+/// the activity can still be fetched and executed. The resulting ActivityCompleted
+/// work item is enqueued to the orchestrator queue but has no instance to process it
+/// (it becomes orphaned).
+///
+/// This validates that force-deletion does not corrupt the worker queue and that
+/// orphaned completions are harmless.
+pub async fn test_orphan_activity_after_instance_force_deletion<F: ProviderFactory>(factory: &F) {
+    tracing::info!("→ Testing cancellation: orphan activity after instance force-deletion");
+    let provider = factory.create_provider().await;
+    let instance = "inst-orphan-activity";
+
+    // 1. Create a running orchestration with an activity in the worker queue
+    provider
+        .enqueue_for_orchestrator(start_item(instance), None)
+        .await
+        .unwrap();
+
+    let (_item, orch_token, _) = provider
+        .fetch_orchestration_item(Duration::from_secs(30), Duration::ZERO, None)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let activity_item = WorkItem::ActivityExecute {
+        instance: instance.to_string(),
+        execution_id: 1,
+        id: 1,
+        name: "TestActivity".to_string(),
+        input: "test-input".to_string(),
+        session_id: None,
+    };
+
+    provider
+        .ack_orchestration_item(
+            &orch_token,
+            1,
+            vec![Event::with_event_id(
+                1,
+                instance.to_string(),
+                1,
+                None,
+                EventKind::OrchestrationStarted {
+                    name: "TestOrch".to_string(),
+                    version: "1.0.0".to_string(),
+                    input: "{}".to_string(),
+                    parent_instance: None,
+                    parent_id: None,
+                    carry_forward_events: None,
+                    initial_custom_status: None,
+                },
+            )],
+            vec![activity_item],
+            vec![],
+            ExecutionMetadata {
+                orchestration_name: Some("TestOrch".to_string()),
+                orchestration_version: Some("1.0.0".to_string()),
+                status: Some("Running".to_string()),
+                ..Default::default()
+            },
+            vec![],
+        )
+        .await
+        .unwrap();
+
+    // 2. Force-delete the instance (bypassing normal cancellation flow)
+    let mgmt = provider
+        .as_management_capability()
+        .expect("Provider should implement ProviderAdmin");
+    let delete_result = mgmt.delete_instance(instance, true).await.unwrap();
+    assert!(
+        delete_result.instances_deleted > 0,
+        "Force delete should remove the instance"
+    );
+
+    // Verify instance is gone
+    assert!(
+        mgmt.get_instance_info(instance).await.is_err(),
+        "Instance should no longer exist"
+    );
+
+    // 3. Activity should still be fetchable from the worker queue
+    //    (worker queue rows may or may not survive deletion — both behaviors are valid)
+    let work_item_result = provider
+        .fetch_work_item(Duration::from_secs(5), Duration::ZERO, None)
+        .await
+        .unwrap();
+
+    if let Some((_item, worker_token, _)) = work_item_result {
+        tracing::info!("Activity survived instance deletion — executing and completing it");
+
+        // 4. Ack with completion — this enqueues ActivityCompleted to orchestrator queue
+        //    which becomes orphaned since the instance is deleted
+        let completion = WorkItem::ActivityCompleted {
+            instance: instance.to_string(),
+            execution_id: 1,
+            id: 1,
+            result: "orphan-result".to_string(),
+        };
+        provider.ack_work_item(&worker_token, Some(completion)).await.unwrap();
+
+        tracing::info!("Activity completed — completion is now orphaned in orchestrator queue");
+    } else {
+        tracing::info!("Force delete also cleaned up worker queue — activity was removed");
+    }
+
+    // Either way, the test verifies no panics/errors occurred during the entire flow
+    tracing::info!("✓ Test passed: orphan activity after instance force-deletion handled gracefully");
 }

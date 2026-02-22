@@ -139,6 +139,7 @@ mod tests {
         test_no_instance_creation_on_enqueue,
         test_null_version_handling,
         test_orchestration_lock_renewal_after_expiration,
+        test_orphan_activity_after_instance_force_deletion,
         test_renew_fails_when_entry_deleted,
         test_renew_returns_missing_when_instance_deleted,
         test_renew_returns_running_when_orchestration_active,
@@ -472,13 +473,13 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_short_poll_returns_immediately() {
         let provider = SqliteTestFactory.create_provider().await;
-        test_short_poll_returns_immediately(&*provider).await;
+        test_short_poll_returns_immediately(&*provider, SqliteTestFactory.short_poll_threshold()).await;
     }
 
     #[tokio::test]
     async fn test_sqlite_short_poll_work_item_returns_immediately() {
         let provider = SqliteTestFactory.create_provider().await;
-        test_short_poll_work_item_returns_immediately(&*provider).await;
+        test_short_poll_work_item_returns_immediately(&*provider, SqliteTestFactory.short_poll_threshold()).await;
     }
 
     #[tokio::test]
@@ -619,6 +620,11 @@ mod tests {
     #[tokio::test]
     async fn test_sqlite_same_activity_in_worker_items_and_cancelled_is_noop() {
         test_same_activity_in_worker_items_and_cancelled_is_noop(&SqliteTestFactory).await;
+    }
+
+    #[tokio::test]
+    async fn test_sqlite_orphan_activity_after_instance_force_deletion() {
+        test_orphan_activity_after_instance_force_deletion(&SqliteTestFactory).await;
     }
 
     // Deletion tests

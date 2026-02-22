@@ -35,7 +35,6 @@ impl Runtime {
         Vec<WorkItem>,
         Vec<ScheduledActivityIdentifier>,
         Result<String, String>,
-        Option<crate::providers::CustomStatusUpdate>, // custom_status update from ctx.set_custom_status() / reset_custom_status()
     ) {
         let orchestration_name = &workitem_reader.orchestration_name;
         debug!(instance, orchestration_name, "🚀 Starting atomic single execution");
@@ -110,9 +109,6 @@ impl Runtime {
             orchestration_version.clone(),
             worker_id,
         );
-
-        // Capture custom_status from the turn before we're done with it
-        let custom_status = turn.custom_status();
 
         // Select/select2 losers: request cancellation for those activities now.
         for activity_id in turn.cancelled_activity_ids() {
@@ -321,6 +317,10 @@ impl Runtime {
                     unmatched.truncate(Self::MAX_CARRY_FORWARD);
                 }
 
+                // Compute accumulated custom status from full history for carry-forward.
+                // Scan for the last CustomStatusUpdated event in the complete history.
+                let initial_custom_status = Self::compute_accumulated_custom_status(history_mgr.full_history_iter());
+
                 // Enqueue continue as new work item with carry-forward events embedded.
                 // The orchestration dispatcher will seed these into the new execution's
                 // history before any new externally-raised events, preserving FIFO.
@@ -330,6 +330,7 @@ impl Runtime {
                     input: input.clone(),
                     version: version.clone(),
                     carry_forward_events: unmatched,
+                    initial_custom_status,
                 });
 
                 Ok("continued as new".to_string())
@@ -385,8 +386,30 @@ impl Runtime {
             orchestrator_items,
             cancelled_activities,
             result,
-            custom_status,
         )
+    }
+
+    /// Compute the accumulated custom status from the full history for CAN carry-forward.
+    ///
+    /// Scans for `initial_custom_status` in `OrchestrationStarted` and all
+    /// `CustomStatusUpdated` events, returning the last-write value.
+    fn compute_accumulated_custom_status<'a>(history: impl Iterator<Item = &'a crate::Event>) -> Option<String> {
+        let mut status: Option<String> = None;
+        for event in history {
+            match &event.kind {
+                crate::EventKind::OrchestrationStarted {
+                    initial_custom_status: Some(s),
+                    ..
+                } => {
+                    status = Some(s.clone());
+                }
+                crate::EventKind::CustomStatusUpdated { status: s } => {
+                    status = s.clone();
+                }
+                _ => {}
+            }
+        }
+        status
     }
 
     /// Maximum number of events that can be carried forward across a continue-as-new boundary.

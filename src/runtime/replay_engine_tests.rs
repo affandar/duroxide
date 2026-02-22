@@ -32,6 +32,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                    initial_custom_status: None,
             },
         )];
 
@@ -115,6 +116,7 @@ mod tests {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             ),
             Event::with_event_id(
@@ -209,6 +211,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                    initial_custom_status: None,
             },
         )];
 
@@ -252,6 +255,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                    initial_custom_status: None,
             },
         )];
 
@@ -302,6 +306,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                    initial_custom_status: None,
             },
         )];
 
@@ -368,6 +373,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                    initial_custom_status: None,
             },
         )];
 

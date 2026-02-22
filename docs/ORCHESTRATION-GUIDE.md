@@ -573,14 +573,22 @@ Publish progress or structured state visible to external clients via polling.
 
 ```rust
 // Set custom status (string payload, typically JSON)
-fn set_custom_status(&self, status: &str)
+fn set_custom_status(&self, status: impl Into<String>)
+
+// Clear custom status back to None
+fn reset_custom_status(&self)
+
+// Read current custom status (reflects all set/reset calls across turns)
+fn get_custom_status(&self) -> Option<String>
 
 // Usage:
 ctx.set_custom_status(&serde_json::to_string(&MyProgress { pct: 50 }).unwrap());
 ```
 
-The status is persisted at the end of each orchestration turn and survives
-`continue_as_new`. Clients read it via `wait_for_status_change()` (see Client API).
+Custom status changes are recorded as `CustomStatusUpdated` history events, making them
+durable and replayable. The status survives `continue_as_new` — the last value is
+carried forward to the new execution. Clients read it via `wait_for_status_change()`
+(see Client API).
 
 #### Sub-Orchestrations
 

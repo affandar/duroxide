@@ -327,6 +327,7 @@ fn unit_workitem_reader_completion_only_must_preserve_version() {
             parent_instance: Some("parent-inst".to_string()),
             parent_id: Some(42),
             carry_forward_events: None,
+            initial_custom_status: None,
         },
     )];
 
@@ -393,6 +394,7 @@ fn unit_workitem_reader_nth_execution_must_preserve_version() {
                 parent_instance: Some("parent-for-v2".to_string()),
                 parent_id: Some(99),
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         Event::with_event_id(
@@ -477,6 +479,7 @@ fn unit_workitem_reader_completion_only_tuple_field_analysis() {
             parent_instance: Some("parent-inst".to_string()),
             parent_id: Some(42),
             carry_forward_events: None,
+            initial_custom_status: None,
         },
     )];
 
@@ -547,6 +550,7 @@ fn unit_input_comes_from_extract_context_not_workitem_reader() {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         Event::with_event_id(
@@ -610,6 +614,7 @@ fn unit_nth_execution_history_starts_with_orchestration_started() {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         // Second event: Activity scheduled
@@ -818,6 +823,7 @@ fn unit_completion_only_replay_uses_nth_execution_input() {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         Event::with_event_id(

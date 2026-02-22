@@ -1,12 +1,13 @@
 //! Provider validation tests for custom status.
 //!
 //! These tests validate that a Provider implementation correctly handles
-//! the `CustomStatusUpdate` variants in `ExecutionMetadata` and the
+//! `CustomStatusUpdated` events in history_delta and the
 //! `get_custom_status()` method.
 
+use crate::EventKind;
 use crate::provider_validation::{Event, ExecutionMetadata, create_instance};
 use crate::provider_validations::ProviderFactory;
-use crate::providers::{CustomStatusUpdate, WorkItem};
+use crate::providers::WorkItem;
 use std::time::Duration;
 
 /// Helper to enqueue an ExternalRaised message to trigger a fetch cycle.
@@ -50,7 +51,7 @@ async fn ack_with_metadata(
 // Set custom status
 // =============================================================================
 
-/// Acking with `Some(Set("progress"))` writes the custom_status and increments version.
+/// Acking with a `CustomStatusUpdated { status: Some("progress") }` event writes the custom_status and increments version.
 pub async fn test_custom_status_set<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
 
@@ -63,16 +64,21 @@ pub async fn test_custom_status_set<F: ProviderFactory>(factory: &F) {
         .await
         .unwrap();
 
-    // Ack with custom status set
+    // Ack with custom status set via history event
     ack_with_metadata(
         &*provider,
         "cs-set",
         1,
-        vec![],
-        ExecutionMetadata {
-            custom_status: Some(CustomStatusUpdate::Set("progress".to_string())),
-            ..Default::default()
-        },
+        vec![Event::with_event_id(
+            100,
+            "cs-set",
+            1,
+            None,
+            EventKind::CustomStatusUpdated {
+                status: Some("progress".to_string()),
+            },
+        )],
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 
@@ -88,7 +94,7 @@ pub async fn test_custom_status_set<F: ProviderFactory>(factory: &F) {
 // Clear custom status
 // =============================================================================
 
-/// Acking with `Some(Clear)` resets custom_status to NULL and increments version.
+/// Acking with a `CustomStatusUpdated { status: None }` event resets custom_status to NULL and increments version.
 pub async fn test_custom_status_clear<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
 
@@ -104,11 +110,16 @@ pub async fn test_custom_status_clear<F: ProviderFactory>(factory: &F) {
         &*provider,
         "cs-clear",
         1,
-        vec![],
-        ExecutionMetadata {
-            custom_status: Some(CustomStatusUpdate::Set("temp".to_string())),
-            ..Default::default()
-        },
+        vec![Event::with_event_id(
+            100,
+            "cs-clear",
+            1,
+            None,
+            EventKind::CustomStatusUpdated {
+                status: Some("temp".to_string()),
+            },
+        )],
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 
@@ -126,11 +137,14 @@ pub async fn test_custom_status_clear<F: ProviderFactory>(factory: &F) {
         &*provider,
         "cs-clear",
         1,
-        vec![],
-        ExecutionMetadata {
-            custom_status: Some(CustomStatusUpdate::Clear),
-            ..Default::default()
-        },
+        vec![Event::with_event_id(
+            101,
+            "cs-clear",
+            1,
+            None,
+            EventKind::CustomStatusUpdated { status: None },
+        )],
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 
@@ -146,7 +160,7 @@ pub async fn test_custom_status_clear<F: ProviderFactory>(factory: &F) {
 // None preserves existing value
 // =============================================================================
 
-/// Acking with `None` (no custom status update) preserves the existing value.
+/// Acking with `None` (no custom status event) preserves the existing value.
 pub async fn test_custom_status_none_preserves<F: ProviderFactory>(factory: &F) {
     let provider = factory.create_provider().await;
 
@@ -162,15 +176,20 @@ pub async fn test_custom_status_none_preserves<F: ProviderFactory>(factory: &F) 
         &*provider,
         "cs-noop",
         1,
-        vec![],
-        ExecutionMetadata {
-            custom_status: Some(CustomStatusUpdate::Set("keep-me".to_string())),
-            ..Default::default()
-        },
+        vec![Event::with_event_id(
+            100,
+            "cs-noop",
+            1,
+            None,
+            EventKind::CustomStatusUpdated {
+                status: Some("keep-me".to_string()),
+            },
+        )],
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 
-    // Ack again with None (no update)
+    // Ack again with no custom status event (no update)
     provider
         .enqueue_for_orchestrator(poke_item("cs-noop"), None)
         .await
@@ -181,10 +200,7 @@ pub async fn test_custom_status_none_preserves<F: ProviderFactory>(factory: &F) 
         "cs-noop",
         1,
         vec![],
-        ExecutionMetadata {
-            custom_status: None,
-            ..Default::default()
-        },
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 
@@ -219,11 +235,16 @@ pub async fn test_custom_status_version_increments<F: ProviderFactory>(factory: 
         &*provider,
         "cs-ver",
         1,
-        vec![],
-        ExecutionMetadata {
-            custom_status: Some(CustomStatusUpdate::Set("a".to_string())),
-            ..Default::default()
-        },
+        vec![Event::with_event_id(
+            100,
+            "cs-ver",
+            1,
+            None,
+            EventKind::CustomStatusUpdated {
+                status: Some("a".to_string()),
+            },
+        )],
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 
@@ -240,11 +261,16 @@ pub async fn test_custom_status_version_increments<F: ProviderFactory>(factory: 
         &*provider,
         "cs-ver",
         1,
-        vec![],
-        ExecutionMetadata {
-            custom_status: Some(CustomStatusUpdate::Set("b".to_string())),
-            ..Default::default()
-        },
+        vec![Event::with_event_id(
+            101,
+            "cs-ver",
+            1,
+            None,
+            EventKind::CustomStatusUpdated {
+                status: Some("b".to_string()),
+            },
+        )],
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 
@@ -261,11 +287,14 @@ pub async fn test_custom_status_version_increments<F: ProviderFactory>(factory: 
         &*provider,
         "cs-ver",
         1,
-        vec![],
-        ExecutionMetadata {
-            custom_status: Some(CustomStatusUpdate::Clear),
-            ..Default::default()
-        },
+        vec![Event::with_event_id(
+            102,
+            "cs-ver",
+            1,
+            None,
+            EventKind::CustomStatusUpdated { status: None },
+        )],
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 
@@ -294,11 +323,16 @@ pub async fn test_custom_status_polling_no_change<F: ProviderFactory>(factory: &
         &*provider,
         "cs-poll",
         1,
-        vec![],
-        ExecutionMetadata {
-            custom_status: Some(CustomStatusUpdate::Set("v1".to_string())),
-            ..Default::default()
-        },
+        vec![Event::with_event_id(
+            100,
+            "cs-poll",
+            1,
+            None,
+            EventKind::CustomStatusUpdated {
+                status: Some("v1".to_string()),
+            },
+        )],
+        ExecutionMetadata { ..Default::default() },
     )
     .await;
 

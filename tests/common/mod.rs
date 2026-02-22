@@ -153,6 +153,7 @@ pub async fn test_create_execution(
                     parent_instance: parent_instance.map(|s| s.to_string()),
                     parent_id,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![], // no worker items
@@ -255,6 +256,7 @@ pub async fn seed_instance_with_pinned_version(
             parent_instance: None,
             parent_id: None,
             carry_forward_events: None,
+            initial_custom_status: None,
         },
     );
     started_event.duroxide_version = version_str;
@@ -281,7 +283,6 @@ pub async fn seed_instance_with_pinned_version(
             orchestration_name: Some(orchestration.to_string()),
             orchestration_version: Some("1.0.0".to_string()),
             pinned_duroxide_version: Some(pinned_version),
-            custom_status: None,
             ..Default::default()
         },
     )

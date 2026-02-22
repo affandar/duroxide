@@ -89,6 +89,7 @@ async fn test_sqlite_provider_basic() {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         Event::with_event_id(
@@ -454,6 +455,7 @@ async fn test_sqlite_file_concurrent_access() {
                         parent_instance: None,
                         parent_id: None,
                         carry_forward_events: None,
+                        initial_custom_status: None,
                     },
                 )],
                 vec![],
@@ -609,6 +611,7 @@ async fn test_sqlite_provider_transactional() {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         Event::with_event_id(
@@ -765,6 +768,7 @@ async fn test_sqlite_provider_timer_queue() {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             )],
             vec![],
@@ -819,6 +823,7 @@ async fn test_execution_status_running() {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         Event::with_event_id(
@@ -894,6 +899,7 @@ async fn test_execution_output_captured_on_continue_as_new() {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         Event::with_event_id(
@@ -989,6 +995,7 @@ async fn test_instrumented_provider_semantic_equivalence() {
             parent_instance: None,
             parent_id: None,
             carry_forward_events: None,
+            initial_custom_status: None,
         },
     )];
 

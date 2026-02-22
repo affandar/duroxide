@@ -276,6 +276,7 @@ async fn test_ack_orchestration_item_atomic() {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ),
         Event::with_event_id(
@@ -528,6 +529,7 @@ async fn test_in_memory_provider_atomic_operations() {
             parent_instance: None,
             parent_id: None,
             carry_forward_events: None,
+            initial_custom_status: None,
         },
     )];
 
