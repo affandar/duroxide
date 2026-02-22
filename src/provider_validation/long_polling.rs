@@ -11,8 +11,8 @@ use std::time::{Duration, Instant};
 ///
 /// Call this test for providers that DO NOT support long polling (e.g., SQLite).
 /// The provider should ignore the `poll_timeout` and return `None` immediately.
-pub async fn test_short_poll_returns_immediately(provider: &dyn Provider) {
-    tracing::info!("→ Testing long polling: short poll returns immediately");
+pub async fn test_short_poll_returns_immediately(provider: &dyn Provider, threshold: Duration) {
+    tracing::info!("→ Testing long polling: short poll returns immediately (threshold: {threshold:?})");
 
     let lock_timeout = Duration::from_secs(30);
     let poll_timeout = Duration::from_millis(500); // Provider should ignore this
@@ -28,8 +28,8 @@ pub async fn test_short_poll_returns_immediately(provider: &dyn Provider) {
 
     // Short polling provider should return much faster than poll_timeout
     assert!(
-        elapsed < Duration::from_millis(100),
-        "Short polling provider should return immediately (elapsed: {elapsed:?}, timeout: {poll_timeout:?})"
+        elapsed < threshold,
+        "Short polling provider should return immediately (elapsed: {elapsed:?}, threshold: {threshold:?})"
     );
 
     tracing::info!("✓ Short poll returned in {:?}", elapsed);
@@ -95,8 +95,8 @@ pub async fn test_fetch_respects_timeout_upper_bound(provider: &dyn Provider) {
 }
 
 /// Test for SHORT POLLING providers: Verify fetch_work_item returns immediately.
-pub async fn test_short_poll_work_item_returns_immediately(provider: &dyn Provider) {
-    tracing::info!("→ Testing long polling: short poll work item returns immediately");
+pub async fn test_short_poll_work_item_returns_immediately(provider: &dyn Provider, threshold: Duration) {
+    tracing::info!("→ Testing long polling: short poll work item returns immediately (threshold: {threshold:?})");
 
     let lock_timeout = Duration::from_secs(30);
     let poll_timeout = Duration::from_millis(500);
@@ -111,8 +111,8 @@ pub async fn test_short_poll_work_item_returns_immediately(provider: &dyn Provid
     assert!(result.is_none(), "Worker queue should be empty");
 
     assert!(
-        elapsed < Duration::from_millis(100),
-        "Short polling provider should return immediately (elapsed: {elapsed:?})"
+        elapsed < threshold,
+        "Short polling provider should return immediately (elapsed: {elapsed:?}, threshold: {threshold:?})"
     );
 
     tracing::info!("✓ Short poll work item returned in {:?}", elapsed);

@@ -598,3 +598,270 @@ async fn custom_status_reset_across_continue_as_new() {
 
     rt.shutdown(None).await;
 }
+
+// =============================================================================
+// get_custom_status() inside orchestration code
+// =============================================================================
+
+/// Verify ctx.get_custom_status() returns the correct value within the orchestration,
+/// including across turn boundaries (replay).
+#[tokio::test]
+async fn custom_status_get_reflects_set_across_turns() {
+    let store = Arc::new(
+        duroxide::providers::sqlite::SqliteProvider::new_in_memory()
+            .await
+            .unwrap(),
+    );
+    let activities = ActivityRegistry::builder()
+        .register("Echo", |_ctx: ActivityContext, input: String| async move { Ok(input) })
+        .build();
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("GetterTest", |ctx: OrchestrationContext, _input: String| async move {
+            // Before any set, should be None
+            assert_eq!(ctx.get_custom_status(), None, "initial should be None");
+
+            ctx.set_custom_status("step-1");
+            assert_eq!(
+                ctx.get_custom_status(),
+                Some("step-1".to_string()),
+                "should reflect set immediately"
+            );
+
+            // Cross a turn boundary — schedule_activity suspends
+            let _ = ctx.schedule_activity("Echo", "ping").await?;
+
+            // After replay, get_custom_status should still return "step-1"
+            assert_eq!(
+                ctx.get_custom_status(),
+                Some("step-1".to_string()),
+                "should survive replay across turns"
+            );
+
+            ctx.set_custom_status("step-2");
+            assert_eq!(
+                ctx.get_custom_status(),
+                Some("step-2".to_string()),
+                "should reflect second set"
+            );
+
+            Ok("done".to_string())
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+    client.start_orchestration("cs-getter", "GetterTest", "").await.unwrap();
+
+    let status = client
+        .wait_for_orchestration("cs-getter", Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    match status {
+        OrchestrationStatus::Completed {
+            custom_status,
+            custom_status_version,
+            ..
+        } => {
+            assert_eq!(custom_status, Some("step-2".to_string()));
+            assert_eq!(custom_status_version, 2);
+        }
+        other => panic!("Expected Completed, got: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+/// Verify ctx.get_custom_status() returns the carried-over value from a previous
+/// execution after continue_as_new, including reset and re-set across CAN iterations.
+///
+/// Execution 1: set "from-first" → CAN
+/// Execution 2: verify carry-forward = "from-first", then reset → CAN
+/// Execution 3: verify carry-forward = None (was reset), then set "from-third" → CAN
+/// Execution 4: verify carry-forward = "from-third", cross turn boundary, verify again → complete
+#[tokio::test]
+async fn custom_status_get_reflects_carry_forward_after_can() {
+    let store = Arc::new(
+        duroxide::providers::sqlite::SqliteProvider::new_in_memory()
+            .await
+            .unwrap(),
+    );
+    let activities = ActivityRegistry::builder()
+        .register("Echo", |_ctx: ActivityContext, input: String| async move { Ok(input) })
+        .build();
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("CANGetter", |ctx: OrchestrationContext, input: String| async move {
+            let iteration: u32 = input.parse().unwrap_or(0);
+            match iteration {
+                0 => {
+                    // Execution 1: set status, CAN
+                    assert_eq!(ctx.get_custom_status(), None, "iter 0: initial should be None");
+                    ctx.set_custom_status("from-first");
+                    assert_eq!(
+                        ctx.get_custom_status(),
+                        Some("from-first".to_string()),
+                        "iter 0: should reflect set"
+                    );
+                    ctx.continue_as_new("1").await?;
+                    Ok("unreachable".to_string())
+                }
+                1 => {
+                    // Execution 2: verify carry-forward, then reset, CAN
+                    assert_eq!(
+                        ctx.get_custom_status(),
+                        Some("from-first".to_string()),
+                        "iter 1: should carry forward from iter 0"
+                    );
+                    ctx.reset_custom_status();
+                    assert_eq!(ctx.get_custom_status(), None, "iter 1: reset should clear");
+                    ctx.continue_as_new("2").await?;
+                    Ok("unreachable".to_string())
+                }
+                2 => {
+                    // Execution 3: verify reset carried forward as None, set new value, CAN
+                    assert_eq!(
+                        ctx.get_custom_status(),
+                        None,
+                        "iter 2: reset in iter 1 should carry forward as None"
+                    );
+                    ctx.set_custom_status("from-third");
+                    ctx.continue_as_new("3").await?;
+                    Ok("unreachable".to_string())
+                }
+                _ => {
+                    // Execution 4: verify "from-third" carried, cross turn boundary, verify again
+                    assert_eq!(
+                        ctx.get_custom_status(),
+                        Some("from-third".to_string()),
+                        "iter 3: should carry forward from iter 2"
+                    );
+
+                    let _ = ctx.schedule_activity("Echo", "ping").await?;
+
+                    // After replay, carried value should still be there
+                    assert_eq!(
+                        ctx.get_custom_status(),
+                        Some("from-third".to_string()),
+                        "iter 3: carried value should survive replay"
+                    );
+
+                    Ok("done".to_string())
+                }
+            }
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+    client
+        .start_orchestration("cs-can-getter", "CANGetter", "0")
+        .await
+        .unwrap();
+
+    let status = client
+        .wait_for_orchestration("cs-can-getter", Duration::from_secs(5))
+        .await
+        .unwrap();
+
+    match status {
+        OrchestrationStatus::Completed {
+            custom_status,
+            custom_status_version,
+            ..
+        } => {
+            // set("from-first") in iter 0, reset in iter 1, set("from-third") in iter 2
+            // = 3 mutations total, final value is "from-third"
+            assert_eq!(custom_status, Some("from-third".to_string()));
+            assert_eq!(custom_status_version, 3);
+        }
+        other => panic!("Expected Completed, got: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+}
+
+// =============================================================================
+// 256KB size limit — precise boundary tests
+// =============================================================================
+
+/// Custom status at exactly MAX_CUSTOM_STATUS_BYTES (256KB) succeeds.
+/// One byte above the limit fails the orchestration.
+/// One byte below the limit succeeds.
+#[tokio::test]
+async fn custom_status_size_limit_precise_boundary() {
+    let store = Arc::new(
+        duroxide::providers::sqlite::SqliteProvider::new_in_memory()
+            .await
+            .unwrap(),
+    );
+    let activities = ActivityRegistry::builder()
+        .register("Echo", |_ctx: ActivityContext, input: String| async move { Ok(input) })
+        .build();
+
+    // --- One byte below limit: should succeed ---
+    let orchestrations = OrchestrationRegistry::builder()
+        .register("BelowLimit", |ctx: OrchestrationContext, _input: String| async move {
+            let below = "x".repeat(limits::MAX_CUSTOM_STATUS_BYTES - 1);
+            ctx.set_custom_status(below);
+            Ok("ok".to_string())
+        })
+        .register("AtLimit", |ctx: OrchestrationContext, _input: String| async move {
+            let exact = "x".repeat(limits::MAX_CUSTOM_STATUS_BYTES);
+            ctx.set_custom_status(exact);
+            Ok("ok".to_string())
+        })
+        .register("AboveLimit", |ctx: OrchestrationContext, _input: String| async move {
+            let above = "x".repeat(limits::MAX_CUSTOM_STATUS_BYTES + 1);
+            ctx.set_custom_status(above);
+            Ok("should-not-reach".to_string())
+        })
+        .build();
+
+    let rt = runtime::Runtime::start_with_store(store.clone(), activities, orchestrations).await;
+    let client = duroxide::Client::new(store.clone());
+
+    // Below limit
+    client.start_orchestration("cs-below", "BelowLimit", "").await.unwrap();
+    let status = client
+        .wait_for_orchestration("cs-below", Duration::from_secs(5))
+        .await
+        .unwrap();
+    match status {
+        OrchestrationStatus::Completed { output, .. } => {
+            assert_eq!(output, "ok", "one byte below limit should succeed");
+        }
+        other => panic!("Expected Completed for below-limit, got: {other:?}"),
+    }
+
+    // At limit
+    client.start_orchestration("cs-at", "AtLimit", "").await.unwrap();
+    let status = client
+        .wait_for_orchestration("cs-at", Duration::from_secs(5))
+        .await
+        .unwrap();
+    match status {
+        OrchestrationStatus::Completed { output, .. } => {
+            assert_eq!(output, "ok", "exactly at limit should succeed");
+        }
+        other => panic!("Expected Completed for at-limit, got: {other:?}"),
+    }
+
+    // Above limit
+    client.start_orchestration("cs-above", "AboveLimit", "").await.unwrap();
+    let status = client
+        .wait_for_orchestration("cs-above", Duration::from_secs(5))
+        .await
+        .unwrap();
+    match status {
+        OrchestrationStatus::Failed { details, .. } => {
+            let msg = details.display_message();
+            assert!(
+                msg.contains("Custom status size") && msg.contains("exceeds limit"),
+                "Expected size limit error, got: {msg}"
+            );
+        }
+        other => panic!("Expected Failed for above-limit, got: {other:?}"),
+    }
+
+    rt.shutdown(None).await;
+}

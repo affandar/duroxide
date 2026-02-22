@@ -537,6 +537,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         )];
 
@@ -564,6 +565,7 @@ mod tests {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             ),
             Event::with_event_id(
@@ -598,6 +600,7 @@ mod tests {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             ),
             Event::with_event_id(
@@ -636,6 +639,7 @@ mod tests {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             ),
             Event::with_event_id(
@@ -659,6 +663,7 @@ mod tests {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             ),
         ];
@@ -684,6 +689,7 @@ mod tests {
                 parent_instance: Some("parent-instance".to_string()),
                 parent_id: Some(42),
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         )];
 
@@ -733,6 +739,7 @@ mod tests {
             input: "new-input".to_string(),
             version: Some("2.0.0".to_string()),
             carry_forward_events: vec![],
+            initial_custom_status: None,
         }];
 
         let history_mgr = HistoryManager::from_history(&[]);
@@ -775,6 +782,7 @@ mod tests {
                 parent_instance: Some("parent-inst".to_string()),
                 parent_id: Some(42),
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         )];
 
@@ -854,6 +862,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         )];
         let mgr = HistoryManager::from_history(&history);
@@ -893,6 +902,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         )];
         let mgr = HistoryManager::from_history(&history);
@@ -912,6 +922,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         ));
         assert!(!mgr.is_full_history_empty());
@@ -931,6 +942,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         )];
         let mut mgr = HistoryManager::from_history(&history);
@@ -969,6 +981,7 @@ mod tests {
                     ("X".to_string(), "old-x".to_string()),
                     ("Y".to_string(), "old-y".to_string()),
                 ],
+                initial_custom_status: None,
             },
             WorkItem::QueueMessage {
                 instance: "inst".to_string(),

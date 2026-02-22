@@ -1019,19 +1019,21 @@ SET current_execution_id = MAX(current_execution_id, excluded.current_execution_
     status = excluded.status,
     output = excluded.output
 
--- Step 2a: Apply custom_status update (if any)
-IF metadata.custom_status IS NOT NULL:
-    IF metadata.custom_status IS Set(value):
+-- Step 2a: Apply custom_status from history events
+-- Scan history_delta for the LAST CustomStatusUpdated event (last write wins)
+LET last_cs_event = history_delta.iter().rev().find(|e| e.kind == CustomStatusUpdated)
+IF last_cs_event IS NOT NULL:
+    IF last_cs_event.status IS Some(value):
         UPDATE instances
         SET custom_status = value,
             custom_status_version = custom_status_version + 1
         WHERE instance_id = instance
-    ELSE IF metadata.custom_status IS Clear:
+    ELSE:  -- status IS None (cleared)
         UPDATE instances
         SET custom_status = NULL,
             custom_status_version = custom_status_version + 1
         WHERE instance_id = instance
--- When metadata.custom_status IS NULL, no change to custom_status/version this turn
+-- When no CustomStatusUpdated event in history_delta, no change to custom_status/version this turn
 
 -- Step 3: Append events to history (APPEND-ONLY — never read/deserialize existing rows)
 -- This constraint is critical: the runtime may ack with new events even when existing
@@ -1586,7 +1588,7 @@ WHERE instance_id = $instance
 
 **Key semantics:**
 - This is a read-only, non-locking operation (no peek-lock)
-- `custom_status` may be `None` (cleared via `CustomStatusUpdate::Clear`)
+- `custom_status` may be `None` (cleared via `ctx.reset_custom_status()`)
 - Version starts at 0 and increments on every `Set` or `Clear` during ack
 
 ---
@@ -1936,8 +1938,8 @@ Before considering your provider complete:
 - [ ] `ack_orchestration_item()` enqueues before cancelling (ordering)
 - [ ] `ack_orchestration_item()` stores `pinned_duroxide_version` unconditionally from `ExecutionMetadata` when provided (no write-once guard — the runtime enforces this invariant)
 - [ ] `ack_orchestration_item()` is append-only for history — INSERTs new events without reading/deserializing existing rows (required for corrupted-history poison termination)
-- [ ] `ack_orchestration_item()` applies `CustomStatusUpdate::Set` / `Clear` when `metadata.custom_status` is `Some`, incrementing `custom_status_version`
-- [ ] `ack_orchestration_item()` does NOT touch `custom_status` when `metadata.custom_status` is `None`
+- [ ] `ack_orchestration_item()` scans `history_delta` for the last `CustomStatusUpdated` event and applies the status change (incrementing `custom_status_version`)
+- [ ] `ack_orchestration_item()` does NOT touch `custom_status` when no `CustomStatusUpdated` event is in `history_delta`
 
 ### Custom Status
 - [ ] `get_custom_status()` returns `Ok(Some((status, version)))` when `version > last_seen_version`

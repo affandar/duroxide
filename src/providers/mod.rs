@@ -263,33 +263,6 @@ pub struct ExecutionMetadata {
     /// in the orchestration dispatcher. The provider does not need to enforce write-once
     /// semantics — it simply stores what it's told.
     pub pinned_duroxide_version: Option<semver::Version>,
-
-    /// User-defined custom status for progress reporting.
-    ///
-    /// - `None`: No update requested. The provider must not modify the existing value.
-    /// - `Some(CustomStatusUpdate::Set(s))`: Write `s` to `custom_status` and increment `custom_status_version`.
-    /// - `Some(CustomStatusUpdate::Clear)`: Set `custom_status` to NULL and increment `custom_status_version`.
-    ///
-    /// This is not a history event — it's pure metadata set by `ctx.set_custom_status()` /
-    /// `ctx.reset_custom_status()` and plumbed through at ack time. Last write per turn wins.
-    /// Persists across turns if not re-set.
-    pub custom_status: Option<CustomStatusUpdate>,
-}
-
-/// Describes a custom status mutation requested by the orchestration.
-///
-/// Used in [`ExecutionMetadata::custom_status`]. The runtime wraps this in `Option`:
-/// - `None` → no change this turn (user did not call `set_custom_status` or `reset_custom_status`)
-/// - `Some(Set(s))` → write `s` to the `custom_status` column
-/// - `Some(Clear)` → reset `custom_status` to NULL
-///
-/// Both `Set` and `Clear` also increment `custom_status_version`.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CustomStatusUpdate {
-    /// Set the custom status to the given string.
-    Set(String),
-    /// Clear the custom status back to NULL.
-    Clear,
 }
 
 /// Provider-backed work queue items the runtime consumes continually.
@@ -434,6 +407,11 @@ pub enum WorkItem {
         /// externally-raised events, preserving FIFO order across CAN boundaries.
         #[serde(default)]
         carry_forward_events: Vec<(String, String)>,
+        /// Custom status accumulated from the previous execution, if any.
+        /// Carried forward so `get_custom_status()` works immediately in the new execution.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        initial_custom_status: Option<String>,
     },
 
     /// Persistent external event raised (goes to orchestrator queue).

@@ -357,6 +357,7 @@ async fn e2e_upgrade_with_preexisting_v1_history() {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             ),
             ev(

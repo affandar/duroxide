@@ -8,9 +8,9 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::debug;
 
 use super::{
-    CustomStatusUpdate, DeleteInstanceResult, DispatcherCapabilityFilter, ExecutionInfo, InstanceFilter, InstanceInfo,
-    OrchestrationItem, Provider, ProviderAdmin, ProviderError, PruneOptions, PruneResult, QueueDepths,
-    ScheduledActivityIdentifier, SessionFetchConfig, SystemMetrics, WorkItem,
+    DeleteInstanceResult, DispatcherCapabilityFilter, ExecutionInfo, InstanceFilter, InstanceInfo, OrchestrationItem,
+    Provider, ProviderAdmin, ProviderError, PruneOptions, PruneResult, QueueDepths, ScheduledActivityIdentifier,
+    SessionFetchConfig, SystemMetrics, WorkItem,
 };
 use crate::{Event, EventKind};
 
@@ -564,6 +564,7 @@ impl SqliteProvider {
                 EventKind::QueueEventDelivered { .. } => "ExternalEventPersistent",
                 EventKind::QueueSubscriptionCancelled { .. } => "ExternalSubscribedPersistentCancelled",
                 EventKind::OrchestrationChained { .. } => "OrchestrationChained",
+                EventKind::CustomStatusUpdated { .. } => "CustomStatusUpdated",
                 #[cfg(feature = "replay-version-test")]
                 EventKind::ExternalSubscribed2 { .. } => "ExternalSubscribed2",
                 #[cfg(feature = "replay-version-test")]
@@ -1154,10 +1155,16 @@ impl Provider for SqliteProvider {
             );
         }
 
-        // Update custom_status on the instances table if requested.
-        // Custom status is instance-scoped (survives ContinueAsNew).
-        match &metadata.custom_status {
-            Some(CustomStatusUpdate::Set(custom_status)) => {
+        // Derive custom_status from history_delta events.
+        // Custom status is now tracked via CustomStatusUpdated events in history.
+        // The provider scans the delta for the last such event to update the column.
+        let custom_status_from_delta = history_delta.iter().rev().find_map(|e| match &e.kind {
+            EventKind::CustomStatusUpdated { status } => Some(status.clone()),
+            _ => None,
+        });
+
+        match custom_status_from_delta {
+            Some(Some(custom_status)) => {
                 sqlx::query(
                     r#"
                     UPDATE instances 
@@ -1165,7 +1172,7 @@ impl Provider for SqliteProvider {
                     WHERE instance_id = ?
                     "#,
                 )
-                .bind(custom_status)
+                .bind(&custom_status)
                 .bind(&instance_id)
                 .execute(&mut *tx)
                 .await
@@ -1174,10 +1181,10 @@ impl Provider for SqliteProvider {
                 debug!(
                     instance = %instance_id,
                     custom_status = %custom_status,
-                    "Updated custom_status"
+                    "Updated custom_status from history event"
                 );
             }
-            Some(CustomStatusUpdate::Clear) => {
+            Some(None) => {
                 sqlx::query(
                     r#"
                     UPDATE instances 
@@ -1192,11 +1199,11 @@ impl Provider for SqliteProvider {
 
                 debug!(
                     instance = %instance_id,
-                    "Cleared custom_status"
+                    "Cleared custom_status from history event"
                 );
             }
             None => {
-                // No update requested — preserve existing value
+                // No CustomStatusUpdated in delta — preserve existing value
             }
         }
 
@@ -2958,6 +2965,7 @@ mod tests {
                         parent_instance: parent_instance.map(|s| s.to_string()),
                         parent_id,
                         carry_forward_events: None,
+                        initial_custom_status: None,
                     },
                 )],
                 vec![],
@@ -3023,6 +3031,7 @@ mod tests {
                 parent_instance: None,
                 parent_id: None,
                 carry_forward_events: None,
+                initial_custom_status: None,
             },
         )];
 
@@ -3091,6 +3100,7 @@ mod tests {
                     parent_instance: None,
                     parent_id: None,
                     carry_forward_events: None,
+                    initial_custom_status: None,
                 },
             ),
             Event::with_event_id(
@@ -3715,6 +3725,7 @@ mod tests {
                         parent_instance: None,
                         parent_id: None,
                         carry_forward_events: None,
+                        initial_custom_status: None,
                     },
                 )],
                 vec![],

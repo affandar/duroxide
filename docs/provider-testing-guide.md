@@ -431,6 +431,7 @@ use duroxide::provider_validations::{
     test_cancelling_nonexistent_activities_is_idempotent,
     test_batch_cancellation_deletes_multiple_activities,
     test_same_activity_in_worker_items_and_cancelled_is_noop,
+    test_orphan_activity_after_instance_force_deletion,
     // ... import other tests as needed
 };
 use std::sync::Arc;
@@ -586,7 +587,7 @@ The validation test suite includes **157 individual test functions** organized i
    - `ignore_attempt_never_goes_negative` - Attempt count never goes below 0
    - `max_attempt_count_across_message_batch` - MAX attempt_count returned for batched messages
 
-11. **Cancellation Support Tests (15 tests)**
+11. **Cancellation Support Tests (16 tests)**
     - `test_fetch_returns_running_state_for_active_orchestration` - Fetching activity for running orchestration proceeds normally
     - `test_fetch_returns_terminal_state_when_orchestration_completed` - Fetching activity for completed orchestration
     - `test_fetch_returns_terminal_state_when_orchestration_failed` - Fetching activity for failed orchestration
@@ -603,6 +604,7 @@ The validation test suite includes **157 individual test functions** organized i
     - `test_cancelling_nonexistent_activities_is_idempotent` - Cancelling activities that don't exist is silently ignored
     - `test_batch_cancellation_deletes_multiple_activities` - Multiple activities can be cancelled in a single `ack_orchestration_item`
     - `test_same_activity_in_worker_items_and_cancelled_is_noop` - Activity in both `worker_items` and `cancelled_activities` results in no-op (INSERT then DELETE)
+    - `test_orphan_activity_after_instance_force_deletion` - Force-deleting an instance while activities are in the worker queue is handled gracefully
 
 12. **Deletion Tests (13 tests)** - `duroxide::provider_validations::deletion`
     - `test_delete_terminal_instances` - Delete completed/failed instances

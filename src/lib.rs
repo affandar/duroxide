@@ -438,7 +438,7 @@ pub use providers::{
 };
 
 // Re-export capability filtering types
-pub use providers::{CustomStatusUpdate, DispatcherCapabilityFilter, SemverRange, current_build_version};
+pub use providers::{DispatcherCapabilityFilter, SemverRange, current_build_version};
 
 // Re-export deletion/pruning types for Client API users
 pub use providers::{DeleteInstanceResult, InstanceFilter, InstanceTree, PruneOptions, PruneResult};
@@ -984,6 +984,11 @@ pub enum EventKind {
         #[serde(skip_serializing_if = "Option::is_none")]
         #[serde(default)]
         carry_forward_events: Option<Vec<(String, String)>>,
+        /// Custom status carried forward from the previous execution during continue-as-new.
+        /// Initialized from the last `CustomStatusUpdated` event in the previous execution's history.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        #[serde(default)]
+        initial_custom_status: Option<String>,
     },
 
     /// Orchestration completed with a final result.
@@ -1094,6 +1099,12 @@ pub enum EventKind {
     /// are not counted as having consumed an arrival.
     #[serde(rename = "ExternalSubscribedPersistentCancelled")]
     QueueSubscriptionCancelled { reason: String },
+
+    /// Custom status was updated via `ctx.set_custom_status()` or `ctx.reset_custom_status()`.
+    /// `Some(s)` means set to `s`; `None` means cleared back to NULL.
+    /// This event makes custom status changes durable and replayable.
+    #[serde(rename = "CustomStatusUpdated")]
+    CustomStatusUpdated { status: Option<String> },
 
     /// V2 subscription: includes a topic filter for pub/sub matching.
     /// Feature-gated for replay engine extensibility verification.
@@ -1370,6 +1381,10 @@ pub enum Action {
     /// Optional version string selects the target orchestration version for the new execution.
     ContinueAsNew { input: String, version: Option<String> },
 
+    /// Update the custom status of the orchestration.
+    /// `Some(s)` means set to `s`; `None` means cleared back to NULL.
+    UpdateCustomStatus { status: Option<String> },
+
     /// Subscribe to a persistent external event by name (mailbox semantics).
     /// Unlike WaitExternal, persistent events use FIFO matching and survive cancellation.
     DequeueEvent { scheduling_event_id: u64, name: String },
@@ -1469,10 +1484,10 @@ struct CtxInner {
     orchestration_version: String,
     logging_enabled_this_poll: bool,
 
-    /// Pending custom status mutation for this turn.
-    /// `None` means no `set_custom_status()` or `reset_custom_status()` was called.
-    /// Plumbed into `ExecutionMetadata` at ack time.
-    custom_status_update: Option<crate::providers::CustomStatusUpdate>,
+    /// Accumulated custom status from history events.
+    /// Updated by `CustomStatusUpdated` events during replay and by `set_custom_status()` / `reset_custom_status()` calls.
+    /// `None` means no custom status has been set (either never set, or cleared via `reset_custom_status()`).
+    accumulated_custom_status: Option<String>,
 }
 
 impl CtxInner {
@@ -1520,7 +1535,7 @@ impl CtxInner {
             orchestration_version,
             logging_enabled_this_poll: false,
 
-            custom_status_update: None,
+            accumulated_custom_status: None,
         }
     }
 
@@ -1882,36 +1897,6 @@ pub struct ActivityContext {
 }
 
 impl ActivityContext {
-    /// Create a new activity context. This constructor is intended for internal runtime use.
-    ///
-    /// Creates context with a new (non-cancelled) cancellation token.
-    /// Note: The runtime now uses `new_with_cancellation` to provide a shared token.
-    #[allow(dead_code)]
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn new(
-        instance_id: String,
-        execution_id: u64,
-        orchestration_name: String,
-        orchestration_version: String,
-        activity_name: String,
-        activity_id: u64,
-        worker_id: String,
-        store: std::sync::Arc<dyn crate::providers::Provider>,
-    ) -> Self {
-        Self {
-            instance_id,
-            execution_id,
-            orchestration_name,
-            orchestration_version,
-            activity_name,
-            activity_id,
-            worker_id,
-            session_id: None,
-            cancellation_token: tokio_util::sync::CancellationToken::new(),
-            store,
-        }
-    }
-
     /// Create a new activity context with a specific cancellation token.
     ///
     /// This constructor is intended for internal runtime use when the worker
@@ -3038,8 +3023,10 @@ impl OrchestrationContext {
     /// # }
     /// ```
     pub fn set_custom_status(&self, status: impl Into<String>) {
+        let status: String = status.into();
         let mut inner = self.inner.lock().unwrap();
-        inner.custom_status_update = Some(crate::providers::CustomStatusUpdate::Set(status.into()));
+        inner.accumulated_custom_status = Some(status.clone());
+        inner.emit_action(Action::UpdateCustomStatus { status: Some(status) });
     }
 
     /// Clear the custom status back to `None`. The provider will set the column to NULL
@@ -3055,13 +3042,17 @@ impl OrchestrationContext {
     /// ```
     pub fn reset_custom_status(&self) {
         let mut inner = self.inner.lock().unwrap();
-        inner.custom_status_update = Some(crate::providers::CustomStatusUpdate::Clear);
+        inner.accumulated_custom_status = None;
+        inner.emit_action(Action::UpdateCustomStatus { status: None });
     }
 
-    /// Returns the pending custom status update for this turn, if any.
-    /// Used internally by the runtime to plumb into `ExecutionMetadata` at ack time.
-    pub(crate) fn custom_status_update(&self) -> Option<crate::providers::CustomStatusUpdate> {
-        self.inner.lock().unwrap().custom_status_update.clone()
+    /// Returns the current custom status value, if any.
+    ///
+    /// This reflects all `set_custom_status` / `reset_custom_status` calls made so far
+    /// in this and previous turns. In a CAN'd execution, it includes the value carried
+    /// from the previous execution.
+    pub fn get_custom_status(&self) -> Option<String> {
+        self.inner.lock().unwrap().accumulated_custom_status.clone()
     }
 }
 

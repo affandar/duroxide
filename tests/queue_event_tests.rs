@@ -896,9 +896,7 @@ async fn multi_queue_isolation_and_independent_fifo() {
         Ok(format!("{order1},{order2}|{pay1},{pay2}|{notif1}"))
     };
 
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register("MultiQueue", orch)
-        .build();
+    let orchestration_registry = OrchestrationRegistry::builder().register("MultiQueue", orch).build();
     let activity_registry = ActivityRegistry::builder().build();
 
     let options = runtime::RuntimeOptions {
@@ -913,11 +911,26 @@ async fn multi_queue_isolation_and_independent_fifo() {
     // Enqueue messages across queues in interleaved order BEFORE starting orchestration.
     // This tests that buffered messages are matched to the correct queue by name,
     // not by arrival order across all queues.
-    client.enqueue_event("inst-multi-q", "payments", "pay_first").await.unwrap();
-    client.enqueue_event("inst-multi-q", "orders", "order_first").await.unwrap();
-    client.enqueue_event("inst-multi-q", "notifications", "alert_1").await.unwrap();
-    client.enqueue_event("inst-multi-q", "orders", "order_second").await.unwrap();
-    client.enqueue_event("inst-multi-q", "payments", "pay_second").await.unwrap();
+    client
+        .enqueue_event("inst-multi-q", "payments", "pay_first")
+        .await
+        .unwrap();
+    client
+        .enqueue_event("inst-multi-q", "orders", "order_first")
+        .await
+        .unwrap();
+    client
+        .enqueue_event("inst-multi-q", "notifications", "alert_1")
+        .await
+        .unwrap();
+    client
+        .enqueue_event("inst-multi-q", "orders", "order_second")
+        .await
+        .unwrap();
+    client
+        .enqueue_event("inst-multi-q", "payments", "pay_second")
+        .await
+        .unwrap();
 
     // Start orchestration — all five messages are already buffered
     client
@@ -966,12 +979,8 @@ async fn multi_queue_staggered_delivery() {
 
     let noop_activity = |_ctx: ActivityContext, _input: String| async move { Ok("ok".to_string()) };
 
-    let orchestration_registry = OrchestrationRegistry::builder()
-        .register("StaggeredQ", orch)
-        .build();
-    let activity_registry = ActivityRegistry::builder()
-        .register("Noop", noop_activity)
-        .build();
+    let orchestration_registry = OrchestrationRegistry::builder().register("StaggeredQ", orch).build();
+    let activity_registry = ActivityRegistry::builder().register("Noop", noop_activity).build();
 
     let options = runtime::RuntimeOptions {
         dispatcher_min_poll_interval: Duration::from_millis(10),
@@ -983,8 +992,14 @@ async fn multi_queue_staggered_delivery() {
     let client = Client::new(store.clone());
 
     // Pre-buffer: two commands and one status
-    client.enqueue_event("inst-staggered-q", "commands", "c1").await.unwrap();
-    client.enqueue_event("inst-staggered-q", "commands", "c2").await.unwrap();
+    client
+        .enqueue_event("inst-staggered-q", "commands", "c1")
+        .await
+        .unwrap();
+    client
+        .enqueue_event("inst-staggered-q", "commands", "c2")
+        .await
+        .unwrap();
     client.enqueue_event("inst-staggered-q", "status", "s1").await.unwrap();
 
     client

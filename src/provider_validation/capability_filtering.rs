@@ -40,6 +40,7 @@ fn orchestration_started_event(instance: &str, duroxide_version: &str) -> Event 
             parent_instance: None,
             parent_id: None,
             carry_forward_events: None,
+            initial_custom_status: None,
         },
     );
     event.duroxide_version = duroxide_version.to_string();
@@ -105,7 +106,6 @@ async fn seed_instance_with_version(
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
                 pinned_duroxide_version: Some(pinned_version),
-                custom_status: None,
                 ..Default::default()
             },
             vec![],
@@ -434,6 +434,7 @@ pub async fn test_continue_as_new_execution_gets_own_pinned_version<F: ProviderF
                 input: "{}".to_string(),
                 version: Some("1.0.0".to_string()),
                 carry_forward_events: vec![],
+                initial_custom_status: None,
             }],
             ExecutionMetadata {
                 status: Some("ContinuedAsNew".to_string()),
@@ -590,7 +591,6 @@ pub async fn test_ack_stores_pinned_version_via_metadata_update<F: ProviderFacto
                 orchestration_name: Some("TestOrch".to_string()),
                 orchestration_version: Some("1.0.0".to_string()),
                 pinned_duroxide_version: None,
-                custom_status: None,
                 ..Default::default()
             },
             vec![],
@@ -1052,7 +1052,6 @@ pub async fn test_ack_appends_event_to_corrupted_history<F: ProviderFactory>(fac
         orchestration_version: Some(item.version.clone()),
         parent_instance_id: None,
         pinned_duroxide_version: None,
-        custom_status: None,
     };
 
     // Ack with the failed event — this MUST succeed despite corrupted history rows.

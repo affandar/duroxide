@@ -39,6 +39,7 @@ pub fn started_event(event_id: u64) -> Event {
             parent_instance: None,
             parent_id: None,
             carry_forward_events: None,
+            initial_custom_status: None,
         },
     )
 }
