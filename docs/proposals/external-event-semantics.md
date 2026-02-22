@@ -1,6 +1,6 @@
 # Proposal: External Event Semantics Fix + Persistent Events
 
-**Issue:** [#57 — Orphaned ExternalSubscribed from race/select consumes future events with same name](https://github.com/affandar/duroxide/issues/57)
+**Issue:** [#57 — Orphaned ExternalSubscribed from race/select consumes future events with same name](https://github.com/microsoft/duroxide/issues/57)
 
 ## Problem Statement
 

@@ -6,9 +6,9 @@ This document captures ideas for integrating Large Language Models into the duro
 
 | # | Feature | Issue | Description |
 |---|---------|-------|-------------|
-| 1 | [LLM Provider](#1-llm-provider) | [#21](https://github.com/affandar/duroxide/issues/21) | Replay-safe LLM operations on orchestration context (generate, if_true, extract, etc.) |
-| 2 | [Dynamic Orchestration Construction](#2-dynamic-orchestration-construction) | [#22](https://github.com/affandar/duroxide/issues/22) | LLM-driven orchestration that constructs itself dynamically using tools |
-| 3 | [LLM Build Step for Visualization](#3-llm-build-step-for-visualization) | [#23](https://github.com/affandar/duroxide/issues/23) | Cargo build integration to generate orchestration diagrams from code |
+| 1 | [LLM Provider](#1-llm-provider) | [#21](https://github.com/microsoft/duroxide/issues/21) | Replay-safe LLM operations on orchestration context (generate, if_true, extract, etc.) |
+| 2 | [Dynamic Orchestration Construction](#2-dynamic-orchestration-construction) | [#22](https://github.com/microsoft/duroxide/issues/22) | LLM-driven orchestration that constructs itself dynamically using tools |
+| 3 | [LLM Build Step for Visualization](#3-llm-build-step-for-visualization) | [#23](https://github.com/microsoft/duroxide/issues/23) | Cargo build integration to generate orchestration diagrams from code |
 
 ---
 

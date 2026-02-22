@@ -8,11 +8,11 @@ This document captures improvements to **toygres**, the test application built o
 
 | # | Feature | Issue | Description |
 |---|---------|-------|-------------|
-| 1 | [Replica Support](#1-replica-support) | [#24](https://github.com/affandar/duroxide/issues/24) | Add read replicas with streaming replication |
-| 2 | [Manual Failover](#2-manual-failover) | [#25](https://github.com/affandar/duroxide/issues/25) | Support operator-initiated failover to replica |
-| 3 | [Automatic Failover Monitoring](#3-automatic-failover-monitoring) | [#26](https://github.com/affandar/duroxide/issues/26) | Instance actor monitors health and triggers automatic failover |
-| 4 | [Backup & Restore](#4-backup--restore) | [#27](https://github.com/affandar/duroxide/issues/27) | Point-in-time backup and restore capabilities |
-| 5 | [Postgres Parameters](#5-postgres-parameters) | [#28](https://github.com/affandar/duroxide/issues/28) | Configure and apply Postgres parameters dynamically |
+| 1 | [Replica Support](#1-replica-support) | [#24](https://github.com/microsoft/duroxide/issues/24) | Add read replicas with streaming replication |
+| 2 | [Manual Failover](#2-manual-failover) | [#25](https://github.com/microsoft/duroxide/issues/25) | Support operator-initiated failover to replica |
+| 3 | [Automatic Failover Monitoring](#3-automatic-failover-monitoring) | [#26](https://github.com/microsoft/duroxide/issues/26) | Instance actor monitors health and triggers automatic failover |
+| 4 | [Backup & Restore](#4-backup--restore) | [#27](https://github.com/microsoft/duroxide/issues/27) | Point-in-time backup and restore capabilities |
+| 5 | [Postgres Parameters](#5-postgres-parameters) | [#28](https://github.com/microsoft/duroxide/issues/28) | Configure and apply Postgres parameters dynamically |
 
 ---
 

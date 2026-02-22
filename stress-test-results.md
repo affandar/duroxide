@@ -190,7 +190,7 @@ aaab571 Update provider correctness test plan for timer queue removal
 02811fa feat: Add concurrency to worker dispatcher
 6696ae7 refactor: Make delayed visibility mandatory for all providers
 fb84818 docs: Add comprehensive provider correctness test plan
-16b62c2 Merge branch 'main' of github.com:affandar/duroxide
+16b62c2 Merge branch 'main' of github.com:microsoft/duroxide
 a0ffbec Merge branch 'dispatchers': Graceful shutdown and 100ms default polling
 fc6abb4 feat: Graceful shutdown with configurable timeout and shutdown flag handling
 5a58a5d pg provider plan

@@ -1,7 +1,7 @@
 # Management API Improvements Proposal
 
 > **Status**: Proposed  
-> **Issue**: [#10](https://github.com/affandar/duroxide/issues/10)  
+> **Issue**: [#10](https://github.com/microsoft/duroxide/issues/10)  
 > **Related**: [Core Improvements Roadmap](proposals/core-improvements-roadmap.md#3-management-api-improvements)
 
 ## Overview

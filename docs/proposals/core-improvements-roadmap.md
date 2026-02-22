@@ -6,16 +6,16 @@ This document captures needed improvements to the core duroxide framework. Each 
 
 | # | Improvement | Issue | Description |
 |---|-------------|-------|-------------|
-| 1 | [Pub/Sub for RaiseEvent](#1-pubsub-for-raiseevent) | [#8](https://github.com/affandar/duroxide/issues/8) | MQTT/Redis-style topic subscriptions for broadcasting events to multiple orchestrations |
-| 2 | [Dispatcher Improvements](#2-dispatcher-improvements) | [#9](https://github.com/affandar/duroxide/issues/9) | Spin off executions, prefetch from queue, sticky message routing via mpsc channels |
-| 3 | [Management API Improvements](#3-management-api-improvements) | [#10](https://github.com/affandar/duroxide/issues/10) | Enriched list responses, truncate APIs, pagination, and performance fixes |
-| 4 | [General Performance Work](#4-general-performance-work) | [#11](https://github.com/affandar/duroxide/issues/11) | Reduce redundant history scans, replay optimizations, serialization overhead |
-| 5 | [Macro Support](#5-macro-support) | [#12](https://github.com/affandar/duroxide/issues/12) | `register_activity!()`, `call_durable!()` macros to eliminate boilerplate |
-| 6 | [Poison Message Detection](#6-poison-message-and-instance-detection) | [#13](https://github.com/affandar/duroxide/issues/13) | Quarantine instances after N consecutive failures with configurable policy |
-| 7 | [Registry Discovery API](#7-registry-discovery-api) | [#14](https://github.com/affandar/duroxide/issues/14) | Query registered orchestrations/activities with metadata and descriptions |
-| 8 | [Event Size Limits](#8-event-size-limits) | [#15](https://github.com/affandar/duroxide/issues/15) | Configurable limits on payload sizes to prevent memory/storage issues |
-| 9 | [Runtime-Provider Contract Versioning](#9-runtime-provider-contract-versioning) | [#16](https://github.com/affandar/duroxide/issues/16) | Version and capability negotiation between runtime and provider |
-| 10 | [Managed Long-Running Activities](#10-managed-long-running-activities) | [#17](https://github.com/affandar/duroxide/issues/17) | Bidirectional communication for progress updates and control signals |
+| 1 | [Pub/Sub for RaiseEvent](#1-pubsub-for-raiseevent) | [#8](https://github.com/microsoft/duroxide/issues/8) | MQTT/Redis-style topic subscriptions for broadcasting events to multiple orchestrations |
+| 2 | [Dispatcher Improvements](#2-dispatcher-improvements) | [#9](https://github.com/microsoft/duroxide/issues/9) | Spin off executions, prefetch from queue, sticky message routing via mpsc channels |
+| 3 | [Management API Improvements](#3-management-api-improvements) | [#10](https://github.com/microsoft/duroxide/issues/10) | Enriched list responses, truncate APIs, pagination, and performance fixes |
+| 4 | [General Performance Work](#4-general-performance-work) | [#11](https://github.com/microsoft/duroxide/issues/11) | Reduce redundant history scans, replay optimizations, serialization overhead |
+| 5 | [Macro Support](#5-macro-support) | [#12](https://github.com/microsoft/duroxide/issues/12) | `register_activity!()`, `call_durable!()` macros to eliminate boilerplate |
+| 6 | [Poison Message Detection](#6-poison-message-and-instance-detection) | [#13](https://github.com/microsoft/duroxide/issues/13) | Quarantine instances after N consecutive failures with configurable policy |
+| 7 | [Registry Discovery API](#7-registry-discovery-api) | [#14](https://github.com/microsoft/duroxide/issues/14) | Query registered orchestrations/activities with metadata and descriptions |
+| 8 | [Event Size Limits](#8-event-size-limits) | [#15](https://github.com/microsoft/duroxide/issues/15) | Configurable limits on payload sizes to prevent memory/storage issues |
+| 9 | [Runtime-Provider Contract Versioning](#9-runtime-provider-contract-versioning) | [#16](https://github.com/microsoft/duroxide/issues/16) | Version and capability negotiation between runtime and provider |
+| 10 | [Managed Long-Running Activities](#10-managed-long-running-activities) | [#17](https://github.com/microsoft/duroxide/issues/17) | Bidirectional communication for progress updates and control signals |
 
 ---
 

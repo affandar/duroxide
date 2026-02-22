@@ -3,7 +3,7 @@
 **For:** Developers and LLMs implementing custom storage backends for Duroxide  
 **Reference implementations:**
 - SQLite: `src/providers/sqlite.rs` (bundled)
-- PostgreSQL: [duroxide-pg](https://github.com/affandar/duroxide-pg) (external)
+- PostgreSQL: [duroxide-pg](https://github.com/microsoft/duroxide-pg) (external)
 
 > **🤖 AI Assistant Users:** Install the [duroxide-provider-implementation](skills/duroxide-provider-implementation.md) skill for your AI coding assistant. See [docs/skills/README.md](skills/README.md) for instructions on VS Code Copilot, Claude Code, and Cursor.
 
@@ -2138,7 +2138,7 @@ See `src/providers/sqlite.rs` for complete implementation examples.
 
 - **Reference implementations:**
   - SQLite (bundled): `src/providers/sqlite.rs`
-  - PostgreSQL (external): [duroxide-pg](https://github.com/affandar/duroxide-pg)
+  - PostgreSQL (external): [duroxide-pg](https://github.com/microsoft/duroxide-pg)
 - **Validation tests:** `tests/sqlite_provider_validations.rs`
 - **Provider trait docs:** `src/providers/mod.rs`
 - **Testing guide:** `docs/provider-testing-guide.md`

@@ -41,9 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Release:** <https://crates.io/crates/duroxide/0.1.19>
 
-**Proposal:** [Custom Status Progress](https://github.com/affandar/duroxide/blob/main/docs/proposals/custom-status-progress.md)
-**Proposal:** [External Event Semantics](https://github.com/affandar/duroxide/blob/main/docs/proposals/external-event-semantics.md)
-**Proposal:** [Persistent Event Queuing](https://github.com/affandar/duroxide/blob/main/docs/proposals/persistent-event-queuing.md)
+**Proposal:** [Custom Status Progress](https://github.com/microsoft/duroxide/blob/main/docs/proposals/custom-status-progress.md)
+**Proposal:** [External Event Semantics](https://github.com/microsoft/duroxide/blob/main/docs/proposals/external-event-semantics.md)
+**Proposal:** [Persistent Event Queuing](https://github.com/microsoft/duroxide/blob/main/docs/proposals/persistent-event-queuing.md)
 
 ### Added
 
@@ -85,7 +85,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Release:** <https://crates.io/crates/duroxide/0.1.18>
 
-**Proposal:** [Activity Implicit Sessions v2](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/activity-implicit-sessions-v2.md)
+**Proposal:** [Activity Implicit Sessions v2](https://github.com/microsoft/duroxide/blob/main/docs/proposals-impl/activity-implicit-sessions-v2.md)
 
 ### Added
 
@@ -124,7 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Release:** <https://crates.io/crates/duroxide/0.1.17>
 
-**Proposal:** [Provider Capability Filtering](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/provider-capability-filtering.md)
+**Proposal:** [Provider Capability Filtering](https://github.com/microsoft/duroxide/blob/main/docs/proposals-impl/provider-capability-filtering.md)
 
 ### Added
 
@@ -162,7 +162,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Release:** <https://crates.io/crates/duroxide/0.1.16>
 
-**Proposal:** [Persist Cancellation Decisions in History](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/history-cancellation-events.md)
+**Proposal:** [Persist Cancellation Decisions in History](https://github.com/microsoft/duroxide/blob/main/docs/proposals-impl/history-cancellation-events.md)
 
 ### Added
 
@@ -237,7 +237,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 **Release:** <https://crates.io/crates/duroxide/0.1.13>
 
-**Proposal:** [System Calls as Real Activities](https://github.com/affandar/duroxide/blob/main/docs/proposals-impl/system-calls-as-activities.md)
+**Proposal:** [System Calls as Real Activities](https://github.com/microsoft/duroxide/blob/main/docs/proposals-impl/system-calls-as-activities.md)
 
 ### Changed
 

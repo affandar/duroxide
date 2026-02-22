@@ -1,7 +1,7 @@
 # Unregistered Orchestration/Activity Backoff
 
 **Status:** Implemented  
-**Issue:** [#47](https://github.com/affandar/duroxide/issues/47)
+**Issue:** [#47](https://github.com/microsoft/duroxide/issues/47)
 
 ## Overview
 

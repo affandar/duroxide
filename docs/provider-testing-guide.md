@@ -901,7 +901,7 @@ MyProvider           2/2        81         0          0        0        0       
 
 Duroxide provides a shell script to run stress tests with resource monitoring.
 
-**Script**: [`run-stress-tests.sh`](https://github.com/affandar/duroxide/blob/main/run-stress-tests.sh)
+**Script**: [`run-stress-tests.sh`](https://github.com/microsoft/duroxide/blob/main/run-stress-tests.sh)
 
 ### Usage
 

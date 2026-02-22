@@ -6,9 +6,9 @@ This document captures needed improvements to duroxide providers, including scal
 
 | # | Improvement | Issue | Description |
 |---|-------------|-------|-------------|
-| 1 | [Distributed Provider](#1-distributed-provider) | [#18](https://github.com/affandar/duroxide/issues/18) | Sharded provider layer aggregating multiple underlying providers for horizontal scale |
-| 2 | [Postgres Provider Performance](#2-postgres-provider-performance) | [#19](https://github.com/affandar/duroxide/issues/19) | Performance improvements for duroxide-pg, including Citus/Elastic cluster evaluation |
-| 3 | [Zero-Disk Architecture Provider](#3-zero-disk-architecture-provider) | [#20](https://github.com/affandar/duroxide/issues/20) | Provider based on cloud blob storage (Azure Storage) with no local disk dependency |
+| 1 | [Distributed Provider](#1-distributed-provider) | [#18](https://github.com/microsoft/duroxide/issues/18) | Sharded provider layer aggregating multiple underlying providers for horizontal scale |
+| 2 | [Postgres Provider Performance](#2-postgres-provider-performance) | [#19](https://github.com/microsoft/duroxide/issues/19) | Performance improvements for duroxide-pg, including Citus/Elastic cluster evaluation |
+| 3 | [Zero-Disk Architecture Provider](#3-zero-disk-architecture-provider) | [#20](https://github.com/microsoft/duroxide/issues/20) | Provider based on cloud blob storage (Azure Storage) with no local disk dependency |
 
 ---
 
@@ -132,7 +132,7 @@ pub struct DistributedProviderConfig {
 ### Current State
 
 The Postgres provider is implemented in a separate repository:
-- **Repository**: [affandar/duroxide-pg](https://github.com/affandar/duroxide-pg)
+- **Repository**: [microsoft/duroxide-pg](https://github.com/microsoft/duroxide-pg)
 
 ### Performance Improvement Areas
 
@@ -196,7 +196,7 @@ Build a provider that uses **cloud blob storage** as the primary persistence lay
 
 ### Option A: SlateDB-based Provider
 
-> 📄 See detailed proposal: [duroxide-pg/docs/SLATEDB_AZURE_PROPOSAL.md](https://github.com/affandar/duroxide-pg/blob/main/docs/SLATEDB_AZURE_PROPOSAL.md)
+> 📄 See detailed proposal: [duroxide-pg/docs/SLATEDB_AZURE_PROPOSAL.md](https://github.com/microsoft/duroxide-pg/blob/main/docs/SLATEDB_AZURE_PROPOSAL.md)
 
 [SlateDB](https://github.com/slatedb/slatedb) is an embedded key-value store built on object storage:
 - LSM-tree architecture with object storage as SST backend

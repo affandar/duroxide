@@ -193,7 +193,7 @@ PostgreSQL implementation:
 - Implements Provider trait for PostgreSQL
 - Uses stored procedures for atomic operations
 - Includes `pg-stress` benchmarking tool
-- Repository: [github.com/affandar/duroxide-pg](https://github.com/affandar/duroxide-pg)
+- Repository: [github.com/microsoft/duroxide-pg](https://github.com/microsoft/duroxide-pg)
 
 ### toygres (PostgreSQL Fleet Manager)
 

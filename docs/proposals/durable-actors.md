@@ -1,6 +1,6 @@
 # Durable Actors: Integrating Duroxide with Actor Frameworks
 
-**GitHub Issue**: [#29](https://github.com/affandar/duroxide/issues/29)
+**GitHub Issue**: [#29](https://github.com/microsoft/duroxide/issues/29)
 
 > ⚠️ **Note**: The ideas in this document have not been vetted in detail by a human yet. They are meant to get the creative juices flowing and serve as a starting point for deeper exploration.
 

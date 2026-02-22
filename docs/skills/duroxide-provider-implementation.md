@@ -72,7 +72,7 @@ When implementing a provider:
 - **Testing Guide**: [docs/provider-testing-guide.md](../provider-testing-guide.md)
 - **Reference Implementations**:
   - SQLite (bundled): `src/providers/sqlite.rs`
-  - PostgreSQL: [duroxide-pg](https://github.com/affandar/duroxide-pg)
+  - PostgreSQL: [duroxide-pg](https://github.com/microsoft/duroxide-pg)
 - **Provider Trait**: `src/providers/mod.rs`
 - **Validation Tests**: `tests/sqlite_provider_validations.rs`
 
